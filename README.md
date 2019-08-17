@@ -71,7 +71,7 @@ The easiest way to get etcd is to use one of the pre-built release binaries whic
 
 For more installation guides, please check out [play.etcd.io](http://play.etcd.io) and [operating etcd](https://github.com/etcd-io/etcd/tree/master/Documentation#operating-etcd-clusters).
 
-For those wanting to try the very latest version, [build the latest version of etcd][dl-build] from the `master` branch. This first needs [*Go*](https://golang.org/) installed (version 1.11+ is required). All development occurs on `master`, including new features and bug fixes. Bug fixes are first targeted at `master` and subsequently ported to release branches, as described in the [branch management][branch-management] guide.
+For those wanting to try the very latest version, [build the latest version of etcd][dl-build] from the `master` branch. This first needs [*Go*](https://golang.org/) installed (version 1.12+ is required). All development occurs on `master`, including new features and bug fixes. Bug fixes are first targeted at `master` and subsequently ported to release branches, as described in the [branch management][branch-management] guide.
 
 [github-release]: https://github.com/etcd-io/etcd/releases
 [branch-management]: ./Documentation/branch_management.md
@@ -171,7 +171,7 @@ See [reporting bugs](Documentation/reporting_bugs.md) for details about reportin
 
 ## Reporting a security vulnerability
 
-A security vulnerability can be reported as an issue, however, GitHub and mailing lists may NOT always be an appropriate place for reporting vulnerabilities. In that case, please reach out to the project [MAINTAINERS](https://github.com/etcd-io/etcd/blob/master/MAINTAINERS) to first discuss the vulnerabilities with them and take necessary action per such discussion.
+See [security disclosure and release process](security/README.md) for details on how to report a security vulnerability and how the etcd team manages it.
 
 ## Issue and PR management
 

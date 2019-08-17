@@ -7,20 +7,20 @@ simple
 v1
 ----
 voters=(1)
-1: StateProbe match=0 next=2
+1: StateProbe match=0 next=1
 
 simple
 v2 l3
 ----
 voters=(1 2) learners=(3)
-1: StateProbe match=0 next=2
-2: StateProbe match=0 next=3
-3: StateProbe match=0 next=3 learner
+1: StateProbe match=0 next=1
+2: StateProbe match=0 next=2
+3: StateProbe match=0 next=2 learner
 
 simple
 r1 v5
 ----
-more than voter changed without entering joint config
+more than one voter changed without entering joint config
 
 simple
 r1 r2
@@ -30,12 +30,12 @@ removed all voters
 simple
 v3 v4
 ----
-more than voter changed without entering joint config
+more than one voter changed without entering joint config
 
 simple
 l1 v5
 ----
-more than voter changed without entering joint config
+more than one voter changed without entering joint config
 
 simple
 l1 l2
@@ -46,11 +46,11 @@ simple
 l2 l3 l4 l5
 ----
 voters=(1) learners=(2 3 4 5)
-1: StateProbe match=0 next=2
-2: StateProbe match=0 next=3 learner
-3: StateProbe match=0 next=3 learner
-4: StateProbe match=0 next=9 learner
-5: StateProbe match=0 next=9 learner
+1: StateProbe match=0 next=1
+2: StateProbe match=0 next=2 learner
+3: StateProbe match=0 next=2 learner
+4: StateProbe match=0 next=8 learner
+5: StateProbe match=0 next=8 learner
 
 simple
 r1
@@ -61,4 +61,4 @@ simple
 r2 r3 r4 r5
 ----
 voters=(1)
-1: StateProbe match=0 next=2
+1: StateProbe match=0 next=1
