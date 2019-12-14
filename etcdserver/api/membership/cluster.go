@@ -247,7 +247,12 @@ func (c *RaftCluster) Recover(onSet func(*zap.Logger, *semver.Version)) {
 	defer c.Unlock()
 
 	c.members, c.removed = membersFromStore(c.lg, c.v2store)
-	c.version = clusterVersionFromStore(c.lg, c.v2store)
+	if c.be != nil {
+		c.version = clusterVersionFromBackend(c.lg, c.be)
+	} else {
+		c.version = clusterVersionFromStore(c.lg, c.v2store)
+	}
+
 	mustDetectDowngrade(c.lg, c.version)
 	onSet(c.lg, c.version)
 
@@ -565,6 +570,7 @@ func (c *RaftCluster) SetVersion(ver *semver.Version, onSet func(*zap.Logger, *s
 			plog.Noticef("set the initial cluster version to %v", version.Cluster(ver.String()))
 		}
 	}
+	oldVer := c.version
 	c.version = ver
 	mustDetectDowngrade(c.lg, c.version)
 	if c.v2store != nil {
@@ -573,7 +579,10 @@ func (c *RaftCluster) SetVersion(ver *semver.Version, onSet func(*zap.Logger, *s
 	if c.be != nil {
 		mustSaveClusterVersionToBackend(c.be, ver)
 	}
-	ClusterVersionMetrics.With(prometheus.Labels{"cluster_version": ver.String()}).Set(1)
+	if oldVer != nil {
+		ClusterVersionMetrics.With(prometheus.Labels{"cluster_version": version.Cluster(oldVer.String())}).Set(0)
+	}
+	ClusterVersionMetrics.With(prometheus.Labels{"cluster_version": version.Cluster(ver.String())}).Set(1)
 	onSet(c.lg, ver)
 }
 
@@ -749,6 +758,26 @@ func clusterVersionFromStore(lg *zap.Logger, st v2store.Store) *semver.Version {
 	return semver.Must(semver.NewVersion(*e.Node.Value))
 }
 
+func clusterVersionFromBackend(lg *zap.Logger, be backend.Backend) *semver.Version {
+	ckey := backendClusterVersionKey()
+	tx := be.ReadTx()
+	tx.RLock()
+	defer tx.RUnlock()
+	keys, vals := tx.UnsafeRange(clusterBucketName, ckey, nil, 0)
+	if len(keys) == 0 {
+		return nil
+	}
+	if len(keys) != 1 {
+		if lg != nil {
+			lg.Panic(
+				"unexpected number of keys when getting cluster version from backend",
+				zap.Int("number-of-key", len(keys)),
+			)
+		}
+	}
+	return semver.Must(semver.NewVersion(string(vals[0])))
+}
+
 // ValidateClusterAndAssignIDs validates the local cluster by matching the PeerURLs
 // with the existing cluster. If the validation succeeds, it assigns the IDs
 // from the existing cluster to the local cluster.
@@ -759,16 +788,21 @@ func ValidateClusterAndAssignIDs(lg *zap.Logger, local *RaftCluster, existing *R
 	if len(ems) != len(lms) {
 		return fmt.Errorf("member count is unequal")
 	}
-	sort.Sort(MembersByPeerURLs(ems))
-	sort.Sort(MembersByPeerURLs(lms))
 
 	ctx, cancel := context.WithTimeout(context.TODO(), 30*time.Second)
 	defer cancel()
 	for i := range ems {
-		if ok, err := netutil.URLStringsEqual(ctx, lg, ems[i].PeerURLs, lms[i].PeerURLs); !ok {
-			return fmt.Errorf("unmatched member while checking PeerURLs (%v)", err)
+		var err error
+		ok := false
+		for j := range lms {
+			if ok, err = netutil.URLStringsEqual(ctx, lg, ems[i].PeerURLs, lms[j].PeerURLs); ok {
+				lms[j].ID = ems[i].ID
+				break
+			}
 		}
-		lms[i].ID = ems[i].ID
+		if !ok {
+			return fmt.Errorf("PeerURLs: no match found for existing member (%v, %v), last resolver error (%v)", ems[i].ID, ems[i].PeerURLs, err)
+		}
 	}
 	local.members = make(map[types.ID]*Member)
 	for _, m := range lms {

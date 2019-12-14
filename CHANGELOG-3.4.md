@@ -3,6 +3,114 @@
 Previous change logs can be found at [CHANGELOG-3.3](https://github.com/etcd-io/etcd/blob/master/CHANGELOG-3.3.md).
 
 
+The minimum recommended etcd versions to run in **production** are 3.1.11+, 3.2.26+, and 3.3.11+.
+
+
+<hr>
+
+
+## [v3.4.4](https://github.com/etcd-io/etcd/releases/tag/v3.4.4) (2020 TBD)
+
+See [code changes](https://github.com/etcd-io/etcd/compare/v3.4.3...v3.4.4) and [v3.4 upgrade guide](https://github.com/etcd-io/etcd/blob/master/Documentation/upgrades/upgrade_3_4.md) for any breaking changes.
+
+**Again, before running upgrades from any previous release, please make sure to read change logs below and [v3.4 upgrade guide](https://github.com/etcd-io/etcd/blob/master/Documentation/upgrades/upgrade_3_4.md).**
+
+### Metrics, Monitoring
+
+See [List of metrics](https://github.com/etcd-io/etcd/tree/master/Documentation/metrics) for all metrics per release.
+
+Note that any `etcd_debugging_*` metrics are experimental and subject to change.
+
+- Add [`etcd_debugging_mvcc_total_put_size_in_bytes`](https://github.com/etcd-io/etcd/pull/11374) Prometheus metric.
+- Fix bug where [etcd_debugging_mvcc_db_compaction_keys_total is always 0](https://github.com/etcd-io/etcd/pull/11400).
+
+### Auth
+
+- Fix [NoPassword check when adding user through GRPC gateway](https://github.com/etcd-io/etcd/pull/11418) ([issue#11414](https://github.com/etcd-io/etcd/issues/11414))
+
+## [v3.4.3](https://github.com/etcd-io/etcd/releases/tag/v3.4.3) (2019-10-24)
+
+See [code changes](https://github.com/etcd-io/etcd/compare/v3.4.2...v3.4.3) and [v3.4 upgrade guide](https://github.com/etcd-io/etcd/blob/master/Documentation/upgrades/upgrade_3_4.md) for any breaking changes.
+
+**Again, before running upgrades from any previous release, please make sure to read change logs below and [v3.4 upgrade guide](https://github.com/etcd-io/etcd/blob/master/Documentation/upgrades/upgrade_3_4.md).**
+
+### Metrics, Monitoring
+
+See [List of metrics](https://github.com/etcd-io/etcd/tree/master/Documentation/metrics) for all metrics per release.
+
+Note that any `etcd_debugging_*` metrics are experimental and subject to change.
+
+- Change [`etcd_cluster_version`](https://github.com/etcd-io/etcd/pull/11254) Prometheus metrics to include only major and minor version.
+
+### Go
+
+- Compile with [*Go 1.12.12*](https://golang.org/doc/devel/release.html#go1.12).
+
+
+## [v3.4.2](https://github.com/etcd-io/etcd/releases/tag/v3.4.2) (2019-10-11)
+
+See [code changes](https://github.com/etcd-io/etcd/compare/v3.4.1...v3.4.2) and [v3.4 upgrade guide](https://github.com/etcd-io/etcd/blob/master/Documentation/upgrades/upgrade_3_4.md) for any breaking changes.
+
+**Again, before running upgrades from any previous release, please make sure to read change logs below and [v3.4 upgrade guide](https://github.com/etcd-io/etcd/blob/master/Documentation/upgrades/upgrade_3_4.md).**
+
+### Dependency
+
+- Upgrade [`google.golang.org/grpc`](https://github.com/grpc/grpc-go/releases) from [**`v1.23.1`**](https://github.com/grpc/grpc-go/releases/tag/v1.23.1) to [**`v1.24.0`**](https://github.com/grpc/grpc-go/releases/tag/v1.24.0).
+
+### etcdctl v3
+
+- Fix [`etcdctl member add`](https://github.com/etcd-io/etcd/pull/11194) command to prevent potential timeout.
+
+### etcdserver
+
+- Add [`tracing`](https://github.com/etcd-io/etcd/pull/11179) to range, put and compact requests in etcdserver.
+- Fix [`wait purge file loop during shutdown`](https://github.com/etcd-io/etcd/pull/11308).
+  - Previously, during shutdown etcd could accidentally remove needed wal files, resulting in catastrophic error `etcdserver: open wal error: wal: file not found.` during startup.
+  - Now, etcd makes sure the purge file loop exits before server signals stop of the raft node.
+
+
+
+### Go
+
+- Compile with [*Go 1.12.9*](https://golang.org/doc/devel/release.html#go1.12) including [*Go 1.12.8*](https://groups.google.com/d/msg/golang-announce/65QixT3tcmg/DrFiG6vvCwAJ) security fixes.
+
+
+<hr>
+
+
+## [v3.4.1](https://github.com/etcd-io/etcd/releases/tag/v3.4.1) (2019-09-17)
+
+See [code changes](https://github.com/etcd-io/etcd/compare/v3.4.0...v3.4.1) and [v3.4 upgrade guide](https://github.com/etcd-io/etcd/blob/master/Documentation/upgrades/upgrade_3_4.md) for any breaking changes.
+
+**Again, before running upgrades from any previous release, please make sure to read change logs below and [v3.4 upgrade guide](https://github.com/etcd-io/etcd/blob/master/Documentation/upgrades/upgrade_3_4.md).**
+
+### Metrics, Monitoring
+
+See [List of metrics](https://github.com/etcd-io/etcd/tree/master/Documentation/metrics) for all metrics per release.
+
+Note that any `etcd_debugging_*` metrics are experimental and subject to change.
+
+- Add [`etcd_debugging_mvcc_current_revision`](https://github.com/etcd-io/etcd/pull/11126) Prometheus metric.
+- Add [`etcd_debugging_mvcc_compact_revision`](https://github.com/etcd-io/etcd/pull/11126) Prometheus metric.
+
+### etcd server
+
+- Fix [secure server logging message](https://github.com/etcd-io/etcd/commit/8b053b0f44c14ac0d9f39b9b78c17c57d47966eb).
+- Remove [redundant `%` characters in file descriptor warning message](https://github.com/etcd-io/etcd/commit/d5f79adc9cea9ec8c93669526464b0aa19ed417b).
+
+### Package `embed`
+
+- Add [`embed.Config.ZapLoggerBuilder`](https://github.com/etcd-io/etcd/pull/11148) to allow creating a custom zap logger.
+
+### Dependency
+
+- Upgrade [`google.golang.org/grpc`](https://github.com/grpc/grpc-go/releases) from [**`v1.23.0`**](https://github.com/grpc/grpc-go/releases/tag/v1.23.0) to [**`v1.23.1`**](https://github.com/grpc/grpc-go/releases/tag/v1.23.1).
+
+### Go
+
+- Compile with [*Go 1.12.9*](https://golang.org/doc/devel/release.html#go1.12) including [*Go 1.12.8*](https://groups.google.com/d/msg/golang-announce/65QixT3tcmg/DrFiG6vvCwAJ) security fixes.
+
+
 <hr>
 
 
@@ -10,6 +118,10 @@ Previous change logs can be found at [CHANGELOG-3.3](https://github.com/etcd-io/
 
 See [code changes](https://github.com/etcd-io/etcd/compare/v3.3.0...v3.4.0) and [v3.4 upgrade guide](https://github.com/etcd-io/etcd/blob/master/Documentation/upgrades/upgrade_3_4.md) for any breaking changes.
 
+- [v3.4.0](https://github.com/etcd-io/etcd/releases/tag/v3.4.0) (2019-08-30), see [code changes](https://github.com/etcd-io/etcd/compare/v3.4.0-rc.4...v3.4.0).
+- [v3.4.0-rc.4](https://github.com/etcd-io/etcd/releases/tag/v3.4.0-rc.4) (2019-08-29), see [code changes](https://github.com/etcd-io/etcd/compare/v3.4.0-rc.3...v3.4.0-rc.4).
+- [v3.4.0-rc.3](https://github.com/etcd-io/etcd/releases/tag/v3.4.0-rc.3) (2019-08-27), see [code changes](https://github.com/etcd-io/etcd/compare/v3.4.0-rc.2...v3.4.0-rc.3).
+- [v3.4.0-rc.2](https://github.com/etcd-io/etcd/releases/tag/v3.4.0-rc.2) (2019-08-23), see [code changes](https://github.com/etcd-io/etcd/compare/v3.4.0-rc.1...v3.4.0-rc.2).
 - [v3.4.0-rc.1](https://github.com/etcd-io/etcd/releases/tag/v3.4.0-rc.1) (2019-08-15), see [code changes](https://github.com/etcd-io/etcd/compare/v3.4.0-rc.0...v3.4.0-rc.1).
 - [v3.4.0-rc.0](https://github.com/etcd-io/etcd/releases/tag/v3.4.0-rc.0) (2019-08-12), see [code changes](https://github.com/etcd-io/etcd/compare/v3.3.0...v3.4.0-rc.0).
 
@@ -89,7 +201,7 @@ See [code changes](https://github.com/etcd-io/etcd/compare/v3.3.0...v3.4.0) and 
   - Fix [gRPC panic "send on closed channel](https://github.com/etcd-io/etcd/issues/9956).
   - [The new client balancer](https://github.com/etcd-io/etcd/blob/master/Documentation/learning/design-client.md) uses an asynchronous resolver to pass endpoints to the gRPC dial function. To block until the underlying connection is up, pass `grpc.WithBlock()` to `clientv3.Config.DialOptions`.
 - Require [*Go 1.12+*](https://github.com/etcd-io/etcd/pull/10045).
-  - Compile with Go 1.12.9 including [*Go 1.12.8*](https://groups.google.com/d/msg/golang-announce/65QixT3tcmg/DrFiG6vvCwAJ) security fixes.
+  - Compile with [*Go 1.12.9*](https://golang.org/doc/devel/release.html#go1.12) including [*Go 1.12.8*](https://groups.google.com/d/msg/golang-announce/65QixT3tcmg/DrFiG6vvCwAJ) security fixes.
 - Migrate dependency management tool from `glide` to [Go module](https://github.com/etcd-io/etcd/pull/10063).
   - <= 3.3 puts `vendor` directory under `cmd/vendor` directory to [prevent conflicting transitive dependencies](https://github.com/etcd-io/etcd/issues/4913).
   - 3.4 moves `cmd/vendor` directory to `vendor` at repository root.
@@ -185,7 +297,7 @@ See [code changes](https://github.com/etcd-io/etcd/compare/v3.3.0...v3.4.0) and 
 - Migrate [`github.com/ghodss/yaml`](https://github.com/ghodss/yaml/releases) to [**`sigs.k8s.io/yaml`**](https://github.com/kubernetes-sigs/yaml) (See [#10687](https://github.com/etcd-io/etcd/pull/10687) for more).
 - Upgrade [`golang.org/x/crypto`](https://github.com/golang/crypto) from [**`crypto@9419663f5`**](https://github.com/golang/crypto/commit/9419663f5a44be8b34ca85f08abc5fe1be11f8a3) to [**`crypto@0709b304e793`**](https://github.com/golang/crypto/commit/0709b304e793a5edb4a2c0145f281ecdc20838a4).
 - Upgrade [`golang.org/x/net`](https://github.com/golang/net) from [**`net@66aacef3d`**](https://github.com/golang/net/commit/66aacef3dd8a676686c7ae3716979581e8b03c47) to [**`net@adae6a3d119a`**](https://github.com/golang/net/commit/adae6a3d119ae4890b46832a2e88a95adc62b8e7).
-- Upgrade [`golang.org/x/sys`](https://github.com/golang/sys) from [**`sys@ebfc5b463`**](https://github.com/golang/sys/commit/ebfc5b4631820b793c9010c87fd8fef0f39eb082) to [**`sys@56ede360e`**](https://github.com/golang/sys/commit/56ede360ec1c541828fb88741b3f1049406d28f5).
+- Upgrade [`golang.org/x/sys`](https://github.com/golang/sys) from [**`sys@ebfc5b463`**](https://github.com/golang/sys/commit/ebfc5b4631820b793c9010c87fd8fef0f39eb082) to [**`sys@c7b8b68b1456`**](https://github.com/golang/sys/commit/c7b8b68b14567162c6602a7c5659ee0f26417c18).
 - Upgrade [`golang.org/x/text`](https://github.com/golang/text) from [**`text@b19bf474d`**](https://github.com/golang/text/commit/b19bf474d317b857955b12035d2c5acb57ce8b01) to [**`v0.3.0`**](https://github.com/golang/text/releases/tag/v0.3.0).
 - Upgrade [`golang.org/x/time`](https://github.com/golang/time) from [**`time@c06e80d93`**](https://github.com/golang/time/commit/c06e80d9300e4443158a03817b8a8cb37d230320) to [**`time@fbb02b229`**](https://github.com/golang/time/commit/fbb02b2291d28baffd63558aa44b4b56f178d650).
 - Upgrade [`github.com/golang/protobuf`](https://github.com/golang/protobuf/releases) from [**`golang/protobuf@1e59b77b5`**](https://github.com/golang/protobuf/commit/1e59b77b52bf8e4b449a57e6f79f21226d571845) to [**`v1.3.2`**](https://github.com/golang/protobuf/releases/tag/v1.3.2).
@@ -592,12 +704,13 @@ Note: **v3.5 will deprecate `etcd --log-package-levels` flag for `capnslog`**; `
 
 - Add [`etcd-dump-logs --entry-type`](https://github.com/etcd-io/etcd/pull/9628) flag to support WAL log filtering by entry type.
 - Add [`etcd-dump-logs --stream-decoder`](https://github.com/etcd-io/etcd/pull/9790) flag to support custom decoder.
+- Add [`SHA256SUMS`](https://github.com/etcd-io/etcd/pull/11087) file to release assets.
+  - etcd maintainers are a distributed team, this change allows for releases to be cut and validation provided without requiring a signing key.
 
 ### Go
 
 - Require [*Go 1.12+*](https://github.com/etcd-io/etcd/pull/10045).
-- Compile with Go 1.12.9 including [*Go 1.12.8*](https://groups.google.com/d/msg/golang-announce/65QixT3tcmg/DrFiG6vvCwAJ) security fixes.
-  - See [*Go 1.12 release page*](https://golang.org/doc/devel/release.html#go1.12) for more.
+- Compile with [*Go 1.12.9*](https://golang.org/doc/devel/release.html#go1.12) including [*Go 1.12.8*](https://groups.google.com/d/msg/golang-announce/65QixT3tcmg/DrFiG6vvCwAJ) security fixes.
 
 ### Dockerfile
 
