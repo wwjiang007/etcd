@@ -19,9 +19,9 @@ import (
 	"fmt"
 	"strings"
 
-	v3 "go.etcd.io/etcd/clientv3"
-	"go.etcd.io/etcd/clientv3/snapshot"
-	pb "go.etcd.io/etcd/etcdserver/etcdserverpb"
+	pb "go.etcd.io/etcd/api/v3/etcdserverpb"
+	v3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/etcdctl/v3/snapshot"
 
 	"github.com/dustin/go-humanize"
 )
@@ -78,7 +78,7 @@ func NewPrinter(printerType string, isHex bool) printer {
 	case "fields":
 		return &fieldsPrinter{newPrinterUnsupported("fields")}
 	case "json":
-		return newJSONPrinter()
+		return newJSONPrinter(isHex)
 	case "protobuf":
 		return newPBPrinter()
 	case "table":

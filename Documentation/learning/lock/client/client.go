@@ -26,8 +26,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"go.etcd.io/etcd/clientv3"
-	"go.etcd.io/etcd/clientv3/concurrency"
+	"go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/client/v3/concurrency"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -183,6 +183,7 @@ func main() {
 
 	locker := concurrency.NewLocker(session, "/lock")
 	locker.Lock()
+	defer locker.Unlock()
 	version := session.Lease()
 	fmt.Printf("acquired lock, version: %d\n", version)
 
