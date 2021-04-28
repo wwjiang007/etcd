@@ -18,9 +18,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
-	"unsafe"
 
-	"go.etcd.io/etcd/pkg/v3/testutil"
+	"go.etcd.io/etcd/client/pkg/v3/testutil"
 )
 
 func TestNodeExternClone(t *testing.T) {
@@ -102,7 +101,7 @@ func TestNodeExternClone(t *testing.T) {
 }
 
 func sameSlice(a, b []*NodeExtern) bool {
-	ah := (*reflect.SliceHeader)(unsafe.Pointer(&a))
-	bh := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-	return *ah == *bh
+	va := reflect.ValueOf(a)
+	vb := reflect.ValueOf(b)
+	return va.Len() == vb.Len() && va.Pointer() == vb.Pointer()
 }

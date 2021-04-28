@@ -19,12 +19,12 @@ import (
 	"net/url"
 	"os"
 
+	"go.etcd.io/etcd/client/pkg/v3/fileutil"
 	"go.etcd.io/etcd/pkg/v3/expect"
-	"go.etcd.io/etcd/pkg/v3/fileutil"
 )
 
 var (
-	etcdServerReadyLines = []string{"enabled capabilities for version", "published"}
+	etcdServerReadyLines = []string{"ready to serve client requests"}
 	binPath              string
 	ctlBinPath           string
 )

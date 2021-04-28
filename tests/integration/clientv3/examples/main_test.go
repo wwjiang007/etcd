@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"go.etcd.io/etcd/pkg/v3/testutil"
+	"go.etcd.io/etcd/client/pkg/v3/testutil"
 	"go.etcd.io/etcd/tests/v3/integration"
 )
 
@@ -42,6 +42,7 @@ func forUnitTestsRunInMockedContext(mocking func(), example func()) {
 
 // TestMain sets up an etcd cluster if running the examples.
 func TestMain(m *testing.M) {
+	testutil.ExitInShortMode("Skipping: the tests require real cluster")
 	v := m.Run()
 	lazyCluster.Terminate()
 

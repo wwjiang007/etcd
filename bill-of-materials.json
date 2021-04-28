@@ -21,8 +21,8 @@
 		"project": "github.com/certifi/gocertifi",
 		"licenses": [
 			{
-				"type": "\"Do What The F*ck You Want To Public License\"",
-				"confidence": 0.3287671232876712
+				"type": "Mozilla Public License 2.0",
+				"confidence": 1
 			}
 		]
 	},
@@ -99,11 +99,11 @@
 		]
 	},
 	{
-		"project": "github.com/dgrijalva/jwt-go",
+		"project": "github.com/davecgh/go-spew/spew",
 		"licenses": [
 			{
-				"type": "MIT License",
-				"confidence": 0.9891304347826086
+				"type": "ISC License",
+				"confidence": 0.9850746268656716
 			}
 		]
 	},
@@ -122,6 +122,15 @@
 			{
 				"type": "Apache License 2.0",
 				"confidence": 1
+			}
+		]
+	},
+	{
+		"project": "github.com/form3tech-oss/jwt-go",
+		"licenses": [
+			{
+				"type": "MIT License",
+				"confidence": 0.9891304347826086
 			}
 		]
 	},
@@ -167,15 +176,6 @@
 			{
 				"type": "Apache License 2.0",
 				"confidence": 1
-			}
-		]
-	},
-	{
-		"project": "github.com/google/uuid",
-		"licenses": [
-			{
-				"type": "BSD 3-clause \"New\" or \"Revised\" License",
-				"confidence": 0.9663865546218487
 			}
 		]
 	},
@@ -396,6 +396,15 @@
 		]
 	},
 	{
+		"project": "github.com/stretchr/testify/assert",
+		"licenses": [
+			{
+				"type": "MIT License",
+				"confidence": 1
+			}
+		]
+	},
+	{
 		"project": "github.com/tmc/grpc-websocket-proxy/wsproxy",
 		"licenses": [
 			{
@@ -433,6 +442,15 @@
 	},
 	{
 		"project": "go.etcd.io/etcd/api/v3",
+		"licenses": [
+			{
+				"type": "Apache License 2.0",
+				"confidence": 1
+			}
+		]
+	},
+	{
+		"project": "go.etcd.io/etcd/client/pkg/v3",
 		"licenses": [
 			{
 				"type": "Apache License 2.0",
@@ -599,6 +617,15 @@
 			{
 				"type": "Apache License 2.0",
 				"confidence": 1
+			}
+		]
+	},
+	{
+		"project": "google.golang.org/protobuf",
+		"licenses": [
+			{
+				"type": "BSD 3-clause \"New\" or \"Revised\" License",
+				"confidence": 0.9663865546218487
 			}
 		]
 	},

@@ -24,13 +24,13 @@ import (
 	"go.etcd.io/etcd/api/v3/authpb"
 	pb "go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
+	"go.etcd.io/etcd/client/pkg/v3/testutil"
 	"go.etcd.io/etcd/client/v3"
-	"go.etcd.io/etcd/pkg/v3/testutil"
 )
 
 // TestV3AuthEmptyUserGet ensures that a get with an empty user will return an empty user error.
 func TestV3AuthEmptyUserGet(t *testing.T) {
-	defer testutil.AfterTest(t)
+	BeforeTest(t)
 	clus := NewClusterV3(t, &ClusterConfig{Size: 1})
 	defer clus.Terminate(t)
 
@@ -49,7 +49,7 @@ func TestV3AuthEmptyUserGet(t *testing.T) {
 // TestV3AuthTokenWithDisable tests that auth won't crash if
 // given a valid token when authentication is disabled
 func TestV3AuthTokenWithDisable(t *testing.T) {
-	defer testutil.AfterTest(t)
+	BeforeTest(t)
 	clus := NewClusterV3(t, &ClusterConfig{Size: 1})
 	defer clus.Terminate(t)
 
@@ -81,7 +81,7 @@ func TestV3AuthTokenWithDisable(t *testing.T) {
 }
 
 func TestV3AuthRevision(t *testing.T) {
-	defer testutil.AfterTest(t)
+	BeforeTest(t)
 	clus := NewClusterV3(t, &ClusterConfig{Size: 1})
 	defer clus.Terminate(t)
 
@@ -119,7 +119,7 @@ func TestV3AuthWithLeaseRevokeWithRootJWT(t *testing.T) {
 }
 
 func testV3AuthWithLeaseRevokeWithRoot(t *testing.T, ccfg ClusterConfig) {
-	defer testutil.AfterTest(t)
+	BeforeTest(t)
 
 	clus := NewClusterV3(t, &ccfg)
 	defer clus.Terminate(t)
@@ -177,7 +177,7 @@ type user struct {
 }
 
 func TestV3AuthWithLeaseRevoke(t *testing.T) {
-	defer testutil.AfterTest(t)
+	BeforeTest(t)
 	clus := NewClusterV3(t, &ClusterConfig{Size: 1})
 	defer clus.Terminate(t)
 
@@ -223,7 +223,7 @@ func TestV3AuthWithLeaseRevoke(t *testing.T) {
 }
 
 func TestV3AuthWithLeaseAttach(t *testing.T) {
-	defer testutil.AfterTest(t)
+	BeforeTest(t)
 	clus := NewClusterV3(t, &ClusterConfig{Size: 1})
 	defer clus.Terminate(t)
 
@@ -335,7 +335,7 @@ func authSetupRoot(t *testing.T, auth pb.AuthClient) {
 }
 
 func TestV3AuthNonAuthorizedRPCs(t *testing.T) {
-	defer testutil.AfterTest(t)
+	BeforeTest(t)
 	clus := NewClusterV3(t, &ClusterConfig{Size: 1})
 	defer clus.Terminate(t)
 
@@ -358,7 +358,7 @@ func TestV3AuthNonAuthorizedRPCs(t *testing.T) {
 
 func TestV3AuthOldRevConcurrent(t *testing.T) {
 	t.Skip() // TODO(jingyih): re-enable the test when #10408 is fixed.
-	defer testutil.AfterTest(t)
+	BeforeTest(t)
 	clus := NewClusterV3(t, &ClusterConfig{Size: 1})
 	defer clus.Terminate(t)
 

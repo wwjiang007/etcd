@@ -15,6 +15,7 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"io"
 	mrand "math/rand"
@@ -26,7 +27,7 @@ import (
 	"sync"
 	"time"
 
-	"go.etcd.io/etcd/pkg/v3/transport"
+	"go.etcd.io/etcd/client/pkg/v3/transport"
 
 	humanize "github.com/dustin/go-humanize"
 	"go.uber.org/zap"
@@ -295,6 +296,7 @@ func (s *server) To() string {
 func (s *server) listenAndServe() {
 	defer s.closeWg.Done()
 
+	ctx := context.Background()
 	s.lg.Info("proxy is listening on", zap.String("from", s.From()))
 	close(s.readyc)
 
@@ -380,7 +382,7 @@ func (s *server) listenAndServe() {
 				}
 				continue
 			}
-			out, err = tp.Dial(s.to.Scheme, s.to.Host)
+			out, err = tp.DialContext(ctx, s.to.Scheme, s.to.Host)
 		} else {
 			out, err = net.Dial(s.to.Scheme, s.to.Host)
 		}

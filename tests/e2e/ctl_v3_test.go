@@ -22,9 +22,9 @@ import (
 	"time"
 
 	"go.etcd.io/etcd/api/v3/version"
-	"go.etcd.io/etcd/pkg/v3/fileutil"
+	"go.etcd.io/etcd/client/pkg/v3/fileutil"
+	"go.etcd.io/etcd/client/pkg/v3/testutil"
 	"go.etcd.io/etcd/pkg/v3/flags"
-	"go.etcd.io/etcd/pkg/v3/testutil"
 )
 
 func TestCtlV3Version(t *testing.T) { testCtl(t, versionTest) }
@@ -52,7 +52,7 @@ func TestClusterVersion(t *testing.T) {
 			if !fileutil.Exist(binary) {
 				t.Skipf("%q does not exist", binary)
 			}
-			defer testutil.AfterTest(t)
+			BeforeTest(t)
 			cfg := newConfigNoTLS()
 			cfg.execPath = binary
 			cfg.snapshotCount = 3
@@ -88,10 +88,10 @@ func versionTest(cx ctlCtx) {
 
 func clusterVersionTest(cx ctlCtx, expected string) {
 	var err error
-	for i := 0; i < 7; i++ {
+	for i := 0; i < 35; i++ {
 		if err = cURLGet(cx.epc, cURLReq{endpoint: "/version", expected: expected}); err != nil {
 			cx.t.Logf("#%d: v3 is not ready yet (%v)", i, err)
-			time.Sleep(time.Second)
+			time.Sleep(200 * time.Millisecond)
 			continue
 		}
 		break
@@ -198,7 +198,7 @@ func withFlagByEnv() ctlOption {
 }
 
 func testCtl(t *testing.T, testFunc func(ctlCtx), opts ...ctlOption) {
-	defer testutil.AfterTest(t)
+	BeforeTest(t)
 
 	ret := ctlCtx{
 		t:           t,

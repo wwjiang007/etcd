@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -29,21 +28,20 @@ import (
 
 	bolt "go.etcd.io/bbolt"
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
+	"go.etcd.io/etcd/client/pkg/v3/fileutil"
+	"go.etcd.io/etcd/client/pkg/v3/types"
 	"go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/snapshot"
-	"go.etcd.io/etcd/pkg/v3/fileutil"
-	"go.etcd.io/etcd/pkg/v3/traceutil"
-	"go.etcd.io/etcd/pkg/v3/types"
 	"go.etcd.io/etcd/raft/v3"
 	"go.etcd.io/etcd/raft/v3/raftpb"
+	"go.etcd.io/etcd/server/v3/config"
 	"go.etcd.io/etcd/server/v3/etcdserver"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/membership"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/snap"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/v2store"
 	"go.etcd.io/etcd/server/v3/etcdserver/cindex"
-	"go.etcd.io/etcd/server/v3/lease"
-	"go.etcd.io/etcd/server/v3/mvcc"
 	"go.etcd.io/etcd/server/v3/mvcc/backend"
+	"go.etcd.io/etcd/server/v3/verify"
 	"go.etcd.io/etcd/server/v3/wal"
 	"go.etcd.io/etcd/server/v3/wal/walpb"
 	"go.uber.org/zap"
@@ -80,11 +78,11 @@ func NewV3(lg *zap.Logger) Manager {
 type v3Manager struct {
 	lg *zap.Logger
 
-	name    string
-	dbPath  string
-	walDir  string
-	snapDir string
-	cl      *membership.RaftCluster
+	name      string
+	srcDbPath string
+	walDir    string
+	snapDir   string
+	cl        *membership.RaftCluster
 
 	skipHashCheck bool
 }
@@ -213,7 +211,7 @@ func (s *v3Manager) Restore(cfg RestoreConfig) error {
 		return err
 	}
 
-	srv := etcdserver.ServerConfig{
+	srv := config.ServerConfig{
 		Logger:              s.lg,
 		Name:                cfg.Name,
 		PeerURLs:            pURLs,
@@ -245,52 +243,85 @@ func (s *v3Manager) Restore(cfg RestoreConfig) error {
 	}
 
 	s.name = cfg.Name
-	s.dbPath = cfg.SnapshotPath
+	s.srcDbPath = cfg.SnapshotPath
 	s.walDir = walDir
 	s.snapDir = filepath.Join(dataDir, "member", "snap")
 	s.skipHashCheck = cfg.SkipHashCheck
 
 	s.lg.Info(
 		"restoring snapshot",
-		zap.String("path", s.dbPath),
+		zap.String("path", s.srcDbPath),
 		zap.String("wal-dir", s.walDir),
 		zap.String("data-dir", dataDir),
 		zap.String("snap-dir", s.snapDir),
+		zap.Stack("stack"),
 	)
+
 	if err = s.saveDB(); err != nil {
 		return err
 	}
-	if err = s.saveWALAndSnap(); err != nil {
+	hardstate, err := s.saveWALAndSnap()
+	if err != nil {
 		return err
 	}
+
+	if err := s.updateCIndex(hardstate.Commit); err != nil {
+		return err
+	}
+
 	s.lg.Info(
 		"restored snapshot",
-		zap.String("path", s.dbPath),
+		zap.String("path", s.srcDbPath),
 		zap.String("wal-dir", s.walDir),
 		zap.String("data-dir", dataDir),
 		zap.String("snap-dir", s.snapDir),
 	)
 
-	return nil
+	return verify.VerifyIfEnabled(verify.Config{
+		ExactIndex: true,
+		Logger:     s.lg,
+		DataDir:    dataDir,
+	})
+}
+
+func (s *v3Manager) outDbPath() string {
+	return filepath.Join(s.snapDir, "db")
 }
 
 // saveDB copies the database snapshot to the snapshot directory
 func (s *v3Manager) saveDB() error {
-	f, ferr := os.OpenFile(s.dbPath, os.O_RDONLY, 0600)
+	err := s.copyAndVerifyDB()
+	if err != nil {
+		return err
+	}
+
+	be := backend.NewDefaultBackend(s.outDbPath())
+	defer be.Close()
+
+	err = membership.TrimMembershipFromBackend(s.lg, be)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *v3Manager) copyAndVerifyDB() error {
+	srcf, ferr := os.Open(s.srcDbPath)
 	if ferr != nil {
 		return ferr
 	}
-	defer f.Close()
+	defer srcf.Close()
 
 	// get snapshot integrity hash
-	if _, err := f.Seek(-sha256.Size, io.SeekEnd); err != nil {
+	if _, err := srcf.Seek(-sha256.Size, io.SeekEnd); err != nil {
 		return err
 	}
 	sha := make([]byte, sha256.Size)
-	if _, err := f.Read(sha); err != nil {
+	if _, err := srcf.Read(sha); err != nil {
 		return err
 	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
+	if _, err := srcf.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
 
@@ -298,8 +329,9 @@ func (s *v3Manager) saveDB() error {
 		return err
 	}
 
-	dbpath := filepath.Join(s.snapDir, "db")
-	db, dberr := os.OpenFile(dbpath, os.O_RDWR|os.O_CREATE, 0600)
+	outDbPath := s.outDbPath()
+
+	db, dberr := os.OpenFile(outDbPath, os.O_RDWR|os.O_CREATE, 0600)
 	if dberr != nil {
 		return dberr
 	}
@@ -310,7 +342,7 @@ func (s *v3Manager) saveDB() error {
 			dbClosed = true
 		}
 	}()
-	if _, err := io.Copy(db, f); err != nil {
+	if _, err := io.Copy(db, srcf); err != nil {
 		return err
 	}
 
@@ -347,66 +379,36 @@ func (s *v3Manager) saveDB() error {
 
 	// db hash is OK, can now modify DB so it can be part of a new cluster
 	db.Close()
-	dbClosed = true
-
-	commit := len(s.cl.Members())
-
-	// update consistentIndex so applies go through on etcdserver despite
-	// having a new raft instance
-	be := backend.NewDefaultBackend(dbpath)
-
-	ci := cindex.NewConsistentIndex(be.BatchTx())
-	ci.SetConsistentIndex(uint64(commit))
-
-	// a lessor never timeouts leases
-	lessor := lease.NewLessor(s.lg, be, lease.LessorConfig{MinLeaseTTL: math.MaxInt64}, ci)
-
-	mvs := mvcc.NewStore(s.lg, be, lessor, ci, mvcc.StoreConfig{CompactionBatchLimit: math.MaxInt32})
-	txn := mvs.Write(traceutil.TODO())
-	btx := be.BatchTx()
-	del := func(k, v []byte) error {
-		txn.DeleteRange(k, nil)
-		return nil
-	}
-
-	// delete stored members from old cluster since using new members
-	btx.UnsafeForEach([]byte("members"), del)
-
-	// todo: add back new members when we start to deprecate old snap file.
-	btx.UnsafeForEach([]byte("members_removed"), del)
-
-	// trigger write-out of new consistent index
-	txn.End()
-
-	mvs.Commit()
-	mvs.Close()
-	be.Close()
-
 	return nil
 }
 
 // saveWALAndSnap creates a WAL for the initial cluster
-func (s *v3Manager) saveWALAndSnap() error {
+//
+// TODO: This code ignores learners !!!
+func (s *v3Manager) saveWALAndSnap() (*raftpb.HardState, error) {
 	if err := fileutil.CreateDirAll(s.walDir); err != nil {
-		return err
+		return nil, err
 	}
 
 	// add members again to persist them to the store we create.
 	st := v2store.New(etcdserver.StoreClusterPrefix, etcdserver.StoreKeysPrefix)
 	s.cl.SetStore(st)
+	be := backend.NewDefaultBackend(s.outDbPath())
+	defer be.Close()
+	s.cl.SetBackend(be)
 	for _, m := range s.cl.Members() {
-		s.cl.AddMember(m)
+		s.cl.AddMember(m, true)
 	}
 
 	m := s.cl.MemberByName(s.name)
 	md := &etcdserverpb.Metadata{NodeID: uint64(m.ID), ClusterID: uint64(s.cl.ID())}
 	metadata, merr := md.Marshal()
 	if merr != nil {
-		return merr
+		return nil, merr
 	}
 	w, walerr := wal.Create(s.lg, s.walDir, metadata)
 	if walerr != nil {
-		return walerr
+		return nil, walerr
 	}
 	defer w.Close()
 
@@ -414,7 +416,7 @@ func (s *v3Manager) saveWALAndSnap() error {
 	for i, id := range s.cl.MemberIDs() {
 		ctx, err := json.Marshal((*s.cl).Member(id))
 		if err != nil {
-			return err
+			return nil, err
 		}
 		peers[i] = raft.Peer{ID: uint64(id), Context: ctx}
 	}
@@ -430,7 +432,7 @@ func (s *v3Manager) saveWALAndSnap() error {
 		}
 		d, err := cc.Marshal()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		ents[i] = raftpb.Entry{
 			Type:  raftpb.EntryConfChange,
@@ -441,31 +443,43 @@ func (s *v3Manager) saveWALAndSnap() error {
 	}
 
 	commit, term := uint64(len(ents)), uint64(1)
-	if err := w.Save(raftpb.HardState{
+	hardState := raftpb.HardState{
 		Term:   term,
 		Vote:   peers[0].ID,
 		Commit: commit,
-	}, ents); err != nil {
-		return err
+	}
+	if err := w.Save(hardState, ents); err != nil {
+		return nil, err
 	}
 
 	b, berr := st.Save()
 	if berr != nil {
-		return berr
+		return nil, berr
+	}
+	confState := raftpb.ConfState{
+		Voters: nodeIDs,
 	}
 	raftSnap := raftpb.Snapshot{
 		Data: b,
 		Metadata: raftpb.SnapshotMetadata{
-			Index: commit,
-			Term:  term,
-			ConfState: raftpb.ConfState{
-				Voters: nodeIDs,
-			},
+			Index:     commit,
+			Term:      term,
+			ConfState: confState,
 		},
 	}
 	sn := snap.New(s.lg, s.snapDir)
 	if err := sn.SaveSnap(raftSnap); err != nil {
-		return err
+		return nil, err
 	}
-	return w.SaveSnapshot(walpb.Snapshot{Index: commit, Term: term})
+	snapshot := walpb.Snapshot{Index: commit, Term: term, ConfState: &confState}
+	return &hardState, w.SaveSnapshot(snapshot)
+}
+
+func (s *v3Manager) updateCIndex(commit uint64) error {
+	be := backend.NewDefaultBackend(s.outDbPath())
+	defer be.Close()
+	ci := cindex.NewConsistentIndex(be.BatchTx())
+	ci.SetConsistentIndex(commit)
+	ci.UnsafeSave(be.BatchTx())
+	return nil
 }

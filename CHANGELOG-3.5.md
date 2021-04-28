@@ -9,15 +9,15 @@ The minimum recommended etcd versions to run in **production** are 3.2.28+, 3.3.
 <hr>
 
 
-## v3.5.0 (2020 TBD)
+## v3.5.0 (2021-06)
 
-See [code changes](https://github.com/etcd-io/etcd/compare/v3.4.0...v3.5.0) and [v3.5 upgrade guide](https://github.com/etcd-io/etcd/blob/master/Documentation/upgrades/upgrade_3_5.md) for any breaking changes.
+See [code changes](https://github.com/etcd-io/etcd/compare/v3.4.0...v3.5.0) and [v3.5 upgrade guide](https://etcd.io/docs/latest/upgrades/upgrade_3_5/) for any breaking changes.
 
 - [v3.5.0](https://github.com/etcd-io/etcd/releases/tag/v3.5.0) (2020 TBD), see [code changes](https://github.com/etcd-io/etcd/compare/v3.5.0-rc.1...v3.5.0).
 - [v3.5.0-rc.1](https://github.com/etcd-io/etcd/releases/tag/v3.5.0-rc.1) (2020 TBD), see [code changes](https://github.com/etcd-io/etcd/compare/v3.5.0-rc.0...v3.5.0-rc.1).
 - [v3.5.0-rc.0](https://github.com/etcd-io/etcd/releases/tag/v3.5.0-rc.0) (2020 TBD), see [code changes](https://github.com/etcd-io/etcd/compare/v3.4.0...v3.5.0-rc.0).
 
-**Again, before running upgrades from any previous release, please make sure to read change logs below and [v3.5 upgrade guide](https://github.com/etcd-io/etcd/blob/master/Documentation/upgrades/upgrade_3_5.md).**
+**Again, before running upgrades from any previous release, please make sure to read change logs below and [v3.5 upgrade guide](https://etcd.io/docs/latest/upgrades/upgrade_3_5/).**
 
 ### Breaking Changes
 
@@ -63,8 +63,15 @@ See [code changes](https://github.com/etcd-io/etcd/compare/v3.4.0...v3.5.0) and 
 - Changed `pkg/flags` function signature to [support structured logger](https://github.com/etcd-io/etcd/pull/11616).
   - Previously, `SetFlagsFromEnv(prefix string, fs *flag.FlagSet) error`, now `SetFlagsFromEnv(lg *zap.Logger, prefix string, fs *flag.FlagSet) error`.
   - Previously, `SetPflagsFromEnv(prefix string, fs *pflag.FlagSet) error`, now `SetPflagsFromEnv(lg *zap.Logger, prefix string, fs *pflag.FlagSet) error`.
-
-### `etcdctl`
+- ClientV3 supports [grpc resolver API](https://github.com/etcd-io/etcd/blob/master/client/v3/naming/resolver/resolver.go).
+  - Endpoints can be managed using [endpoints.Manager](https://github.com/etcd-io/etcd/blob/master/client/v3/naming/endpoints/endpoints.go)
+  - Previously supported [GRPCResolver was decomissioned](https://github.com/etcd-io/etcd/pull/12675). Use [resolver](https://github.com/etcd-io/etcd/blob/master/client/v3/naming/resolver/resolver.go) instead.
+- Turned on [--pre-vote by default](https://github.com/etcd-io/etcd/pull/12770). Should prevent disrupting RAFT leader by an individual member. 
+- [ETCD_CLIENT_DEBUG env](https://github.com/etcd-io/etcd/pull/12786): Now supports log levels (debug, info, warn, error, dpanic, panic, fatal). Only when set, overrides application-wide grpc logging settings.
+- [Embed Etcd.Close()](https://github.com/etcd-io/etcd/pull/12828) needs to called exactly once and closes Etcd.Err() stream.
+- [Embed Etcd does not override global/grpc logger](https://github.com/etcd-io/etcd/pull/12861) be default any longer. If desired, please call `embed.Config::SetupGlobalLoggers()` explicitly. 
+- Errors: `context cancelled` or `context deadline exceeded` are exposed as codes.Canceled, codes.DeadlineExceeded instead of 'codes.Unknown'.
+###
 
 - Make sure [save snapshot downloads checksum for integrity checks](https://github.com/etcd-io/etcd/pull/11896).
 
@@ -73,11 +80,11 @@ See [code changes](https://github.com/etcd-io/etcd/compare/v3.4.0...v3.5.0) and 
 - Add [`TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256` and `TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256` to `etcd --cipher-suites`](https://github.com/etcd-io/etcd/pull/11864).
 - Changed [the format of WAL entries related to auth for not keeping password as a plain text](https://github.com/etcd-io/etcd/pull/11943).
 - Add third party [Security Audit Report](https://github.com/etcd-io/etcd/pull/12201).
-- A [log warning](https://github.com/etcd-io/etcd/pull/12242) is added when etcd use any existing directory that has a permission different than 700 on Linux and 777 on Windows.
+- A [log warning](https://github.com/etcd-io/etcd/pull/12242) is added when etcd uses any existing directory that has a permission different than 700 on Linux and 777 on Windows.
 
 ### Metrics, Monitoring
 
-See [List of metrics](https://github.com/etcd-io/etcd/tree/master/Documentation/metrics) for all metrics per release.
+See [List of metrics](https://etcd.io/docs/latest/metrics/) for all metrics per release.
 
 Note that any `etcd_debugging_*` metrics are experimental and subject to change.
 
@@ -115,6 +122,7 @@ Note that any `etcd_debugging_*` metrics are experimental and subject to change.
 - Fix [quorum protection logic when promoting a learner](https://github.com/etcd-io/etcd/pull/11640).
 - Improve [peer corruption checker](https://github.com/etcd-io/etcd/pull/11621) to work when peer mTLS is enabled.
 - Log [`[CLIENT-PORT]/health` check in server side](https://github.com/etcd-io/etcd/pull/11704).
+- Log [successful etcd server-side health check in debug level](https://github.com/etcd-io/etcd/pull/12677).
 - Improve [compaction performance when latest index is greater than 1-million](https://github.com/etcd-io/etcd/pull/11734).
 - [Refactor consistentindex](https://github.com/etcd-io/etcd/pull/11699).
 - [Add log when etcdserver failed to apply command](https://github.com/etcd-io/etcd/pull/11670).
@@ -130,6 +138,7 @@ Note that any `etcd_debugging_*` metrics are experimental and subject to change.
 - Improve logging around snapshot send and receive.
 - [Push down RangeOptions.limit argv into index tree to reduce memory overhead](https://github.com/etcd-io/etcd/pull/11990).
 - Add [reason field for /health response](https://github.com/etcd-io/etcd/pull/11983).
+- Add [exclude alarms from health check conditionally](https://github.com/etcd-io/etcd/pull/12880)
 - Add [`--unsafe-no-fsync`](https://github.com/etcd-io/etcd/pull/11946) flag.
   - Setting the flag disables all uses of fsync, which is unsafe and will cause data loss. This flag makes it possible to run an etcd node for testing and development without placing lots of load on the file system.
 - Add [etcd --auth-token-ttl](https://github.com/etcd-io/etcd/pull/11980) flag to customize `simpleTokenTTL` settings.
@@ -144,7 +153,14 @@ Note that any `etcd_debugging_*` metrics are experimental and subject to change.
 - [Fix server panic](https://github.com/etcd-io/etcd/pull/12288) when force-new-cluster flag is enabled in a cluster which had learner node.
 - Add [`--self-signed-cert-validity`](https://github.com/etcd-io/etcd/pull/12429) flag to support setting certificate expiration time.
   - Notice, certificates generated by etcd are valid for 1 year by default when specifying the auto-tls or peer-auto-tls option.
-
+- Add [`--experimental-warning-apply-duration`](https://github.com/etcd-io/etcd/pull/12448) flag which allows apply duration threshold to be configurable.
+- Add [`--experimental-memory-mlock`](https://github.com/etcd-io/etcd/pull/TODO)" flag which prevents etcd memory pages to be swapped out.
+- Add [`--socket-reuse-port`](https://github.com/etcd-io/etcd/pull/12702) flag
+  - Setting this flag enables `SO_REUSEPORT` which allows rebind of a port already in use. User should take caution when using this flag to ensure flock is properly enforced. 
+- Add [`--socket-reuse-address`](https://github.com/etcd-io/etcd/pull/12702) flag
+  - Setting this flag enables `SO_REUSEADDR` which allows binding to an address in `TIME_WAIT` state, improving etcd restart time.
+- Reduce [around 30% memory allocation by logging range response size without marshal](https://github.com/etcd-io/etcd/pull/12871).
+- `ETCD_VERIFY="all"` enviroment triggers [additional verification of consistency](https://github.com/etcd-io/etcd/pull/) of etcd data-dir files. 
 ### Package `runtime`
 
 - Optimize [`runtime.FDUsage` by removing unnecessary sorting](https://github.com/etcd-io/etcd/pull/12214).
@@ -173,6 +189,8 @@ Note that any `etcd_debugging_*` metrics are experimental and subject to change.
 - Make sure [save snapshot downloads checksum for integrity checks](https://github.com/etcd-io/etcd/pull/11896).
 - Fix [auth token invalid after watch reconnects](https://github.com/etcd-io/etcd/pull/12264). Get AuthToken automatically when clientConn is ready.
 - Improve [clientv3:get AuthToken gracefully without extra connection](https://github.com/etcd-io/etcd/pull/12165).
+- Changed [clientv3 dialing code](https://github.com/etcd-io/etcd/pull/12671) to use grpc resolver API instead of custom balancer.
+  - Endpoints self identify now as `etcd-endpoints://{id}/#initially={list of endpoints}` e.g. `etcd-endpoints://0xc0009d8540/#initially=[localhost:2079]`
 
 ### Package `lease`
 
@@ -193,6 +211,7 @@ Note that any `etcd_debugging_*` metrics are experimental and subject to change.
 - Add [`etcdctl auth status`](https://github.com/etcd-io/etcd/pull/11536) command to check if authentication is enabled
 - Add [`etcdctl get --count-only`](https://github.com/etcd-io/etcd/pull/11743) flag for output type `fields`.
 - Add [`etcdctl member list -w=json --hex`](https://github.com/etcd-io/etcd/pull/11812) flag to print memberListResponse in hex format json.
+- Changed [`etcdctl lock <lockname> exec-command`](https://github.com/etcd-io/etcd/pull/12829) to return exit code of exec-command.
 
 ### gRPC gateway
 
@@ -242,9 +261,9 @@ Note that any `etcd_debugging_*` metrics are experimental and subject to change.
 
 ### Go
 
-- Require [*Go 1.15+*](https://github.com/etcd-io/etcd/pull/11110).
-- Compile with [*Go 1.15*](https://golang.org/doc/devel/release.html#go1.15)
-- etcd uses go [modules](https://github.com/etcd-io/etcd/pull/12279) (instead of vendor dir) to track dependencies.
+- Require [*Go 1.16+*](https://github.com/etcd-io/etcd/pull/11110).
+- Compile with [*Go 1.16*](https://golang.org/doc/devel/release.html#go1.16)
+- etcd uses [go modules](https://github.com/etcd-io/etcd/pull/12279) (instead of vendor dir) to track dependencies.
 
 ### Project Governance
 

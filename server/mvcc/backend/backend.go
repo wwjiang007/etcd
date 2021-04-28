@@ -543,22 +543,6 @@ func (b *backend) OpenReadTxN() int64 {
 	return atomic.LoadInt64(&b.openReadTxN)
 }
 
-// NewTmpBackend creates a backend implementation for testing.
-func NewTmpBackend(batchInterval time.Duration, batchLimit int) (*backend, string) {
-	dir, err := ioutil.TempDir(os.TempDir(), "etcd_backend_test")
-	if err != nil {
-		panic(err)
-	}
-	tmpPath := filepath.Join(dir, "database")
-	bcfg := DefaultBackendConfig()
-	bcfg.Path, bcfg.BatchInterval, bcfg.BatchLimit = tmpPath, batchInterval, batchLimit
-	return newBackend(bcfg), tmpPath
-}
-
-func NewDefaultTmpBackend() (*backend, string) {
-	return NewTmpBackend(defaultBatchInterval, defaultBatchLimit)
-}
-
 type snapshot struct {
 	*bolt.Tx
 	stopc chan struct{}

@@ -87,7 +87,7 @@ func (a *applierV2store) Put(r *RequestV2) Response {
 				a.lg.Panic("failed to unmarshal", zap.String("value", r.Val), zap.Error(err))
 			}
 			if a.cluster != nil {
-				a.cluster.UpdateAttributes(id, attr)
+				a.cluster.UpdateAttributes(id, attr, true)
 			}
 			// return an empty response since there is no consumer.
 			return Response{}
@@ -120,7 +120,7 @@ func (s *EtcdServer) applyV2Request(r *RequestV2) (resp Response) {
 	defer func(start time.Time) {
 		success := resp.Err == nil
 		applySec.WithLabelValues(v2Version, r.Method, strconv.FormatBool(success)).Observe(time.Since(start).Seconds())
-		warnOfExpensiveRequest(s.getLogger(), s.Cfg.WarningApplyDuration, start, stringer, nil, nil)
+		warnOfExpensiveRequest(s.Logger(), s.Cfg.WarningApplyDuration, start, stringer, nil, nil)
 	}(time.Now())
 
 	switch r.Method {

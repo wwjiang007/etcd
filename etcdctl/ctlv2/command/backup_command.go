@@ -15,21 +15,24 @@
 package command
 
 import (
-	"encoding/binary"
 	"log"
 	"os"
 	"path"
-	"path/filepath"
 	"regexp"
 	"time"
 
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
-	"go.etcd.io/etcd/pkg/v3/fileutil"
+	"go.etcd.io/etcd/client/pkg/v3/fileutil"
+	"go.etcd.io/etcd/client/pkg/v3/types"
 	"go.etcd.io/etcd/pkg/v3/idutil"
 	"go.etcd.io/etcd/pkg/v3/pbutil"
 	"go.etcd.io/etcd/raft/v3/raftpb"
+	"go.etcd.io/etcd/server/v3/datadir"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/membership"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/snap"
+	"go.etcd.io/etcd/server/v3/etcdserver/api/v2store"
+	"go.etcd.io/etcd/server/v3/etcdserver/cindex"
+	"go.etcd.io/etcd/server/v3/mvcc/backend"
 	"go.etcd.io/etcd/server/v3/wal"
 	"go.etcd.io/etcd/server/v3/wal/walpb"
 
@@ -54,38 +57,70 @@ func NewBackupCommand() cli.Command {
 	}
 }
 
+type desiredCluster struct {
+	clusterId types.ID
+	nodeId    types.ID
+	members   []*membership.Member
+	confState raftpb.ConfState
+}
+
+func newDesiredCluster() desiredCluster {
+	idgen := idutil.NewGenerator(0, time.Now())
+	nodeID := idgen.Next()
+	clusterID := idgen.Next()
+
+	return desiredCluster{
+		clusterId: types.ID(clusterID),
+		nodeId:    types.ID(nodeID),
+		members: []*membership.Member{
+			{
+				ID: types.ID(nodeID),
+				Attributes: membership.Attributes{
+					Name: "etcdctl-v2-backup",
+				},
+				RaftAttributes: membership.RaftAttributes{
+					PeerURLs: []string{"http://use-flag--force-new-cluster:2080"},
+				}}},
+		confState: raftpb.ConfState{Voters: []uint64{nodeID}},
+	}
+}
+
 // handleBackup handles a request that intends to do a backup.
 func handleBackup(c *cli.Context) error {
 	var srcWAL string
 	var destWAL string
 
+	lg := zap.NewExample()
+
 	withV3 := c.Bool("with-v3")
-	srcSnap := filepath.Join(c.String("data-dir"), "member", "snap")
-	destSnap := filepath.Join(c.String("backup-dir"), "member", "snap")
+	srcDir := c.String("data-dir")
+	destDir := c.String("backup-dir")
+
+	srcSnap := datadir.ToSnapDir(srcDir)
+	destSnap := datadir.ToSnapDir(destDir)
 
 	if c.String("wal-dir") != "" {
 		srcWAL = c.String("wal-dir")
 	} else {
-		srcWAL = filepath.Join(c.String("data-dir"), "member", "wal")
+		srcWAL = datadir.ToWalDir(srcDir)
 	}
 
 	if c.String("backup-wal-dir") != "" {
 		destWAL = c.String("backup-wal-dir")
 	} else {
-		destWAL = filepath.Join(c.String("backup-dir"), "member", "wal")
+		destWAL = datadir.ToWalDir(destDir)
 	}
 
 	if err := fileutil.CreateDirAll(destSnap); err != nil {
 		log.Fatalf("failed creating backup snapshot dir %v: %v", destSnap, err)
 	}
 
-	walsnap := saveSnap(destSnap, srcSnap)
-	metadata, state, ents := loadWAL(srcWAL, walsnap, withV3)
-	saveDB(filepath.Join(destSnap, "db"), filepath.Join(srcSnap, "db"), state.Commit, withV3)
+	desired := newDesiredCluster()
 
-	idgen := idutil.NewGenerator(0, time.Now())
-	metadata.NodeID = idgen.Next()
-	metadata.ClusterID = idgen.Next()
+	walsnap := saveSnap(lg, destSnap, srcSnap, &desired)
+	metadata, state, ents := loadWAL(srcWAL, walsnap, withV3)
+	destDbPath := datadir.ToBackendFileName(destDir)
+	saveDB(lg, destDbPath, datadir.ToBackendFileName(srcDir), state.Commit, &desired, withV3)
 
 	neww, err := wal.Create(zap.NewExample(), destWAL, pbutil.MustMarshal(&metadata))
 	if err != nil {
@@ -102,20 +137,42 @@ func handleBackup(c *cli.Context) error {
 	return nil
 }
 
-func saveSnap(destSnap, srcSnap string) (walsnap walpb.Snapshot) {
-	ss := snap.New(zap.NewExample(), srcSnap)
+func saveSnap(lg *zap.Logger, destSnap, srcSnap string, desired *desiredCluster) (walsnap walpb.Snapshot) {
+	ss := snap.New(lg, srcSnap)
 	snapshot, err := ss.Load()
 	if err != nil && err != snap.ErrNoSnapshot {
 		log.Fatal(err)
 	}
 	if snapshot != nil {
-		walsnap.Index, walsnap.Term = snapshot.Metadata.Index, snapshot.Metadata.Term
-		newss := snap.New(zap.NewExample(), destSnap)
+		walsnap.Index, walsnap.Term, walsnap.ConfState = snapshot.Metadata.Index, snapshot.Metadata.Term, &desired.confState
+		newss := snap.New(lg, destSnap)
+		snapshot.Metadata.ConfState = desired.confState
+		snapshot.Data = mustTranslateV2store(lg, snapshot.Data, desired)
 		if err = newss.SaveSnap(*snapshot); err != nil {
 			log.Fatal(err)
 		}
 	}
 	return walsnap
+}
+
+// mustTranslateV2store processes storeData such that they match 'desiredCluster'.
+// In particular the method overrides membership information.
+func mustTranslateV2store(lg *zap.Logger, storeData []byte, desired *desiredCluster) []byte {
+	st := v2store.New()
+	if err := st.Recovery(storeData); err != nil {
+		lg.Panic("cannot translate v2store", zap.Error(err))
+	}
+
+	raftCluster := membership.NewClusterFromMembers(lg, desired.clusterId, desired.members)
+	raftCluster.SetID(desired.nodeId, desired.clusterId)
+	raftCluster.SetStore(st)
+	raftCluster.PushMembershipToStorage()
+
+	outputData, err := st.Save()
+	if err != nil {
+		lg.Panic("cannot save v2store", zap.Error(err))
+	}
+	return outputData
 }
 
 func loadWAL(srcWAL string, walsnap walpb.Snapshot, v3 bool) (etcdserverpb.Metadata, raftpb.HardState, []raftpb.Entry) {
@@ -171,6 +228,12 @@ func loadWAL(srcWAL string, walsnap walpb.Snapshot, v3 bool) (etcdserverpb.Metad
 			continue
 		}
 
+		if raftReq.ClusterMemberAttrSet != nil {
+			log.Println("ignoring cluster_member_attr_set")
+			remove()
+			continue
+		}
+
 		if v3 || raftReq.Header == nil {
 			continue
 		}
@@ -184,7 +247,8 @@ func loadWAL(srcWAL string, walsnap walpb.Snapshot, v3 bool) (etcdserverpb.Metad
 }
 
 // saveDB copies the v3 backend and strips cluster information.
-func saveDB(destDB, srcDB string, idx uint64, v3 bool) {
+func saveDB(lg *zap.Logger, destDB, srcDB string, idx uint64, desired *desiredCluster, v3 bool) {
+
 	// open src db to safely copy db state
 	if v3 {
 		var src *bolt.DB
@@ -223,35 +287,26 @@ func saveDB(destDB, srcDB string, idx uint64, v3 bool) {
 		}
 	}
 
-	db, err := bolt.Open(destDB, 0644, &bolt.Options{})
-	if err != nil {
-		log.Fatal(err)
-	}
-	tx, err := db.Begin(true)
-	if err != nil {
+	be := backend.NewDefaultBackend(destDB)
+	defer be.Close()
+
+	if err := membership.TrimClusterFromBackend(be); err != nil {
 		log.Fatal(err)
 	}
 
-	// remove membership information; should be clobbered by --force-new-cluster
-	for _, bucket := range []string{"members", "members_removed", "cluster"} {
-		tx.DeleteBucket([]byte(bucket))
-	}
+	raftCluster := membership.NewClusterFromMembers(lg, desired.clusterId, desired.members)
+	raftCluster.SetID(desired.nodeId, desired.clusterId)
+	raftCluster.SetBackend(be)
+	raftCluster.PushMembershipToStorage()
 
-	// update consistent index to match hard state
 	if !v3 {
-		idxBytes := make([]byte, 8)
-		binary.BigEndian.PutUint64(idxBytes, idx)
-		b, err := tx.CreateBucketIfNotExists([]byte("meta"))
-		if err != nil {
-			log.Fatal(err)
-		}
-		b.Put([]byte("consistent_index"), idxBytes)
+		tx := be.BatchTx()
+		tx.Lock()
+		defer tx.Unlock()
+		tx.UnsafeCreateBucket([]byte("meta"))
+		ci := cindex.NewConsistentIndex(tx)
+		ci.SetConsistentIndex(idx)
+		ci.UnsafeSave(tx)
 	}
 
-	if err := tx.Commit(); err != nil {
-		log.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		log.Fatal(err)
-	}
 }

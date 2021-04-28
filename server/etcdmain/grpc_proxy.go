@@ -30,13 +30,13 @@ import (
 	"time"
 
 	pb "go.etcd.io/etcd/api/v3/etcdserverpb"
+	"go.etcd.io/etcd/client/pkg/v3/logutil"
+	"go.etcd.io/etcd/client/pkg/v3/transport"
 	"go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/leasing"
 	"go.etcd.io/etcd/client/v3/namespace"
 	"go.etcd.io/etcd/client/v3/ordering"
 	"go.etcd.io/etcd/pkg/v3/debugutil"
-	"go.etcd.io/etcd/pkg/v3/logutil"
-	"go.etcd.io/etcd/pkg/v3/transport"
 	"go.etcd.io/etcd/server/v3/embed"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/v3election/v3electionpb"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/v3lock/v3lockpb"
@@ -208,7 +208,13 @@ func startGRPCProxy(cmd *cobra.Command, args []string) {
 	}()
 
 	client := mustNewClient(lg)
-	proxyClient := mustNewProxyClient(lg, tlsinfo)
+
+	// The proxy client is used for self-healthchecking.
+	// TODO: The mechanism should be refactored to use internal connection.
+	var proxyClient *clientv3.Client
+	if grpcProxyAdvertiseClientURL != "" {
+		proxyClient = mustNewProxyClient(lg, tlsinfo)
+	}
 	httpClient := mustNewHTTPClient(lg)
 
 	srvhttp, httpl := mustHTTPListener(lg, m, tlsinfo, client, proxyClient)
@@ -380,7 +386,7 @@ func mustListenCMux(lg *zap.Logger, tlsinfo *transport.TLSInfo) cmux.CMux {
 
 func newGRPCProxyServer(lg *zap.Logger, client *clientv3.Client) *grpc.Server {
 	if grpcProxyEnableOrdering {
-		vf := ordering.NewOrderViolationSwitchEndpointClosure(*client)
+		vf := ordering.NewOrderViolationSwitchEndpointClosure(client)
 		client.KV = ordering.NewKV(client.KV, vf)
 		lg.Info("waiting for linearized read from cluster to recover ordering")
 		for {

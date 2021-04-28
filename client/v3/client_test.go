@@ -22,13 +22,13 @@ import (
 	"time"
 
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
-	"go.etcd.io/etcd/pkg/v3/testutil"
+	"go.etcd.io/etcd/client/pkg/v3/testutil"
 
 	"google.golang.org/grpc"
 )
 
 func TestDialCancel(t *testing.T) {
-	defer testutil.AfterTest(t)
+	testutil.BeforeTest(t)
 
 	// accept first connection so client is created with dial timeout
 	ln, err := net.Listen("unix", "dialcancel:12345")
@@ -80,7 +80,9 @@ func TestDialCancel(t *testing.T) {
 }
 
 func TestDialTimeout(t *testing.T) {
-	defer testutil.AfterTest(t)
+	testutil.BeforeTest(t)
+
+	wantError := context.DeadlineExceeded
 
 	// grpc.WithBlock to block until connection up or timeout
 	testCfgs := []Config{
@@ -121,8 +123,8 @@ func TestDialTimeout(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Errorf("#%d: failed to timeout dial on time", i)
 		case err := <-donec:
-			if err != context.DeadlineExceeded {
-				t.Errorf("#%d: unexpected error %v, want %v", i, err, context.DeadlineExceeded)
+			if err.Error() != wantError.Error() {
+				t.Errorf("#%d: unexpected error '%v', want '%v'", i, err, wantError)
 			}
 		}
 	}
@@ -138,13 +140,13 @@ func TestDialNoTimeout(t *testing.T) {
 }
 
 func TestIsHaltErr(t *testing.T) {
-	if !isHaltErr(nil, fmt.Errorf("etcdserver: some etcdserver error")) {
+	if !isHaltErr(context.TODO(), fmt.Errorf("etcdserver: some etcdserver error")) {
 		t.Errorf(`error prefixed with "etcdserver: " should be Halted by default`)
 	}
-	if isHaltErr(nil, rpctypes.ErrGRPCStopped) {
+	if isHaltErr(context.TODO(), rpctypes.ErrGRPCStopped) {
 		t.Errorf("error %v should not halt", rpctypes.ErrGRPCStopped)
 	}
-	if isHaltErr(nil, rpctypes.ErrGRPCNoLeader) {
+	if isHaltErr(context.TODO(), rpctypes.ErrGRPCNoLeader) {
 		t.Errorf("error %v should not halt", rpctypes.ErrGRPCNoLeader)
 	}
 	ctx, cancel := context.WithCancel(context.TODO())

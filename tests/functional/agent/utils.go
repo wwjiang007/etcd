@@ -24,7 +24,7 @@ import (
 	"strconv"
 	"time"
 
-	"go.etcd.io/etcd/pkg/v3/fileutil"
+	"go.etcd.io/etcd/client/pkg/v3/fileutil"
 )
 
 // TODO: support separate WAL directory
@@ -103,6 +103,6 @@ func copyFile(src, dst string) error {
 func cleanPageCache() error {
 	// https://www.kernel.org/doc/Documentation/sysctl/vm.txt
 	// https://github.com/torvalds/linux/blob/master/fs/drop_caches.c
-	cmd := exec.Command("/bin/sh", "-c", `echo "echo 1 > /proc/sys/vm/drop_caches" | sudo sh`)
+	cmd := exec.Command("/bin/sh", "-c", `echo "echo 1 > /proc/sys/vm/drop_caches" | sudo -s -n`)
 	return cmd.Run()
 }

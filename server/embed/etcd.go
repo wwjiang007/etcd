@@ -30,10 +30,11 @@ import (
 	"time"
 
 	"go.etcd.io/etcd/api/v3/version"
+	"go.etcd.io/etcd/client/pkg/v3/transport"
+	"go.etcd.io/etcd/client/pkg/v3/types"
 	"go.etcd.io/etcd/pkg/v3/debugutil"
 	runtimeutil "go.etcd.io/etcd/pkg/v3/runtime"
-	"go.etcd.io/etcd/pkg/v3/transport"
-	"go.etcd.io/etcd/pkg/v3/types"
+	"go.etcd.io/etcd/server/v3/config"
 	"go.etcd.io/etcd/server/v3/etcdserver"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/etcdhttp"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/rafthttp"
@@ -41,6 +42,7 @@ import (
 	"go.etcd.io/etcd/server/v3/etcdserver/api/v2v3"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/v3client"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/v3rpc"
+	"go.etcd.io/etcd/server/v3/verify"
 
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/soheilhy/cmux"
@@ -110,6 +112,13 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		e = nil
 	}()
 
+	if !cfg.SocketOpts.Empty() {
+		cfg.logger.Info(
+			"configuring socket options",
+			zap.Bool("reuse-address", cfg.SocketOpts.ReuseAddress),
+			zap.Bool("reuse-port", cfg.SocketOpts.ReusePort),
+		)
+	}
 	e.cfg.logger.Info(
 		"configuring peer listeners",
 		zap.Strings("listen-peer-urls", e.cfg.getLPURLs()),
@@ -154,7 +163,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 
 	backendFreelistType := parseBackendFreelistType(cfg.BackendFreelistType)
 
-	srvcfg := etcdserver.ServerConfig{
+	srvcfg := config.ServerConfig{
 		Name:                        cfg.Name,
 		ClientURLs:                  cfg.ACUrls,
 		PeerURLs:                    cfg.APUrls,
@@ -181,6 +190,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		BackendBatchInterval:        cfg.BackendBatchInterval,
 		MaxTxnOps:                   cfg.MaxTxnOps,
 		MaxRequestBytes:             cfg.MaxRequestBytes,
+		SocketOpts:                  cfg.SocketOpts,
 		StrictReconfigCheck:         cfg.StrictReconfigCheck,
 		ClientCertAuthEnabled:       cfg.ClientTLSInfo.ClientCertAuth,
 		AuthToken:                   cfg.AuthToken,
@@ -203,6 +213,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		WatchProgressNotifyInterval: cfg.ExperimentalWatchProgressNotifyInterval,
 		DowngradeCheckTime:          cfg.ExperimentalDowngradeCheckTime,
 		WarningApplyDuration:        cfg.ExperimentalWarningApplyDuration,
+		ExperimentalMemoryMlock:     cfg.ExperimentalMemoryMlock,
 	}
 	print(e.cfg.logger, *cfg, srvcfg, memberInitialized)
 	if e.Server, err = etcdserver.NewServer(srvcfg); err != nil {
@@ -247,7 +258,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 	return e, nil
 }
 
-func print(lg *zap.Logger, ec Config, sc etcdserver.ServerConfig, memberInitialized bool) {
+func print(lg *zap.Logger, ec Config, sc config.ServerConfig, memberInitialized bool) {
 	cors := make([]string, 0, len(ec.CORS))
 	for v := range ec.CORS {
 		cors = append(cors, v)
@@ -328,10 +339,17 @@ func (e *Etcd) Close() {
 	lg.Info("closing etcd server", fields...)
 	defer func() {
 		lg.Info("closed etcd server", fields...)
+		verify.MustVerifyIfEnabled(verify.Config{
+			Logger:     lg,
+			DataDir:    e.cfg.Dir,
+			ExactIndex: false,
+		})
 		lg.Sync()
 	}()
 
-	e.closeOnce.Do(func() { close(e.stopc) })
+	e.closeOnce.Do(func() {
+		close(e.stopc)
+	})
 
 	// close client requests with request timeout
 	timeout := 2 * time.Second
@@ -373,21 +391,19 @@ func (e *Etcd) Close() {
 			cancel()
 		}
 	}
+	if e.errc != nil {
+		close(e.errc)
+	}
 }
 
 func stopServers(ctx context.Context, ss *servers) {
-	shutdownNow := func() {
-		// first, close the http.Server
-		ss.http.Shutdown(ctx)
-		// then close grpc.Server; cancels all active RPCs
-		ss.grpc.Stop()
-	}
-
+	// first, close the http.Server
+	ss.http.Shutdown(ctx)
 	// do not grpc.Server.GracefulStop with TLS enabled etcd server
 	// See https://github.com/grpc/grpc-go/issues/1384#issuecomment-317124531
 	// and https://github.com/etcd-io/etcd/issues/8916
 	if ss.secure {
-		shutdownNow()
+		ss.grpc.Stop()
 		return
 	}
 
@@ -405,14 +421,18 @@ func stopServers(ctx context.Context, ss *servers) {
 	case <-ctx.Done():
 		// took too long, manually close open transports
 		// e.g. watch streams
-		shutdownNow()
+		ss.grpc.Stop()
 
 		// concurrent GracefulStop should be interrupted
 		<-ch
 	}
 }
 
-func (e *Etcd) Err() <-chan error { return e.errc }
+// Err - return channel used to report errors during etcd run/shutdown.
+// Since etcd 3.5 the channel is being closed when the etcd is over.
+func (e *Etcd) Err() <-chan error {
+	return e.errc
+}
 
 func configurePeerListeners(cfg *Config) (peers []*peerListener, err error) {
 	if err = updateCipherSuites(&cfg.PeerTLSInfo, cfg.CipherSuites); err != nil {
@@ -458,7 +478,11 @@ func configurePeerListeners(cfg *Config) (peers []*peerListener, err error) {
 			}
 		}
 		peers[i] = &peerListener{close: func(context.Context) error { return nil }}
-		peers[i].Listener, err = rafthttp.NewListener(u, &cfg.PeerTLSInfo)
+		peers[i].Listener, err = transport.NewListenerWithOpts(u.Host, u.Scheme,
+			transport.WithTLSInfo(&cfg.PeerTLSInfo),
+			transport.WithSocketOpts(&cfg.SocketOpts),
+			transport.WithTimeout(rafthttp.ConnReadTimeout, rafthttp.ConnWriteTimeout),
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -491,7 +515,13 @@ func (e *Etcd) servePeers() (err error) {
 			ErrorLog:    defaultLog.New(ioutil.Discard, "", 0), // do not log user error
 		}
 		go srv.Serve(m.Match(cmux.Any()))
-		p.serve = func() error { return m.Serve() }
+		p.serve = func() error {
+			e.cfg.logger.Info(
+				"cmux::serve",
+				zap.String("address", u),
+			)
+			return m.Serve()
+		}
 		p.close = func(ctx context.Context) error {
 			// gracefully shutdown http.Server
 			// close open listeners, idle connections
@@ -505,6 +535,7 @@ func (e *Etcd) servePeers() (err error) {
 				"stopped serving peer traffic",
 				zap.String("address", u),
 			)
+			m.Close()
 			return nil
 		}
 	}
@@ -565,7 +596,10 @@ func configureClientListeners(cfg *Config) (sctxs map[string]*serveCtx, err erro
 			continue
 		}
 
-		if sctx.l, err = net.Listen(network, addr); err != nil {
+		if sctx.l, err = transport.NewListenerWithOpts(addr, u.Scheme,
+			transport.WithSocketOpts(&cfg.SocketOpts),
+			transport.WithSkipTLSInfoCheck(true),
+		); err != nil {
 			return nil, err
 		}
 		// net.Listener will rewrite ipv4 0.0.0.0 to ipv6 [::], breaking
@@ -589,7 +623,7 @@ func configureClientListeners(cfg *Config) (sctxs map[string]*serveCtx, err erro
 			}
 		}
 
-		defer func() {
+		defer func(u url.URL) {
 			if err == nil {
 				return
 			}
@@ -599,7 +633,7 @@ func configureClientListeners(cfg *Config) (sctxs map[string]*serveCtx, err erro
 				zap.String("address", u.Host),
 				zap.Error(err),
 			)
-		}()
+		}(u)
 		for k := range cfg.UserHandlers {
 			sctx.userHandlers[k] = cfg.UserHandlers[k]
 		}
@@ -678,7 +712,10 @@ func (e *Etcd) serveMetrics() (err error) {
 			if murl.Scheme == "http" {
 				tlsInfo = nil
 			}
-			ml, err := transport.NewListener(murl.Host, murl.Scheme, tlsInfo)
+			ml, err := transport.NewListenerWithOpts(murl.Host, murl.Scheme,
+				transport.WithTLSInfo(tlsInfo),
+				transport.WithSocketOpts(&e.cfg.SocketOpts),
+			)
 			if err != nil {
 				return err
 			}

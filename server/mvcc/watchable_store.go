@@ -131,8 +131,6 @@ func (s *watchableStore) watch(key, end []byte, startRev int64, id WatchID, ch c
 		if startRev > wa.minRev {
 			wa.minRev = startRev
 		}
-	}
-	if synced {
 		s.synced.add(wa)
 	} else {
 		slowWatcherGauge.Inc()
@@ -358,8 +356,7 @@ func (s *watchableStore) syncWatchers() int {
 	tx.RLock()
 	revs, vs := tx.UnsafeRange(keyBucketName, minBytes, maxBytes, 0)
 	tx.RUnlock()
-	var evs []mvccpb.Event
-	evs = kvsToEvents(s.store.lg, wg, revs, vs)
+	evs := kvsToEvents(s.store.lg, wg, revs, vs)
 
 	var victims watcherBatch
 	wb := newWatcherBatch(wg, evs)

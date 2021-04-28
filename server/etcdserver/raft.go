@@ -24,12 +24,13 @@ import (
 	"time"
 
 	pb "go.etcd.io/etcd/api/v3/etcdserverpb"
+	"go.etcd.io/etcd/client/pkg/v3/logutil"
+	"go.etcd.io/etcd/client/pkg/v3/types"
 	"go.etcd.io/etcd/pkg/v3/contention"
-	"go.etcd.io/etcd/pkg/v3/logutil"
 	"go.etcd.io/etcd/pkg/v3/pbutil"
-	"go.etcd.io/etcd/pkg/v3/types"
 	"go.etcd.io/etcd/raft/v3"
 	"go.etcd.io/etcd/raft/v3/raftpb"
+	"go.etcd.io/etcd/server/v3/config"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/membership"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/rafthttp"
 	"go.etcd.io/etcd/server/v3/wal"
@@ -419,7 +420,7 @@ func (r *raftNode) advanceTicks(ticks int) {
 	}
 }
 
-func startNode(cfg ServerConfig, cl *membership.RaftCluster, ids []types.ID) (id types.ID, n raft.Node, s *raft.MemoryStorage, w *wal.WAL) {
+func startNode(cfg config.ServerConfig, cl *membership.RaftCluster, ids []types.ID) (id types.ID, n raft.Node, s *raft.MemoryStorage, w *wal.WAL) {
 	var err error
 	member := cl.MemberByName(cfg.Name)
 	metadata := pbutil.MustMarshal(
@@ -460,17 +461,7 @@ func startNode(cfg ServerConfig, cl *membership.RaftCluster, ids []types.ID) (id
 		CheckQuorum:     true,
 		PreVote:         cfg.PreVote,
 	}
-	if cfg.Logger != nil {
-		// called after capnslog setting in "init" function
-		if cfg.LoggerConfig != nil {
-			c.Logger, err = NewRaftLogger(cfg.LoggerConfig)
-			if err != nil {
-				log.Fatalf("cannot create raft logger %v", err)
-			}
-		} else if cfg.LoggerCore != nil && cfg.LoggerWriteSyncer != nil {
-			c.Logger = NewRaftLoggerFromZapCore(cfg.LoggerCore, cfg.LoggerWriteSyncer)
-		}
-	}
+	c.Logger, _ = getRaftLogger(cfg)
 
 	if len(peers) == 0 {
 		n = raft.RestartNode(c)
@@ -483,7 +474,7 @@ func startNode(cfg ServerConfig, cl *membership.RaftCluster, ids []types.ID) (id
 	return id, n, s, w
 }
 
-func restartNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types.ID, *membership.RaftCluster, raft.Node, *raft.MemoryStorage, *wal.WAL) {
+func restartNode(cfg config.ServerConfig, snapshot *raftpb.Snapshot) (types.ID, *membership.RaftCluster, raft.Node, *raft.MemoryStorage, *wal.WAL) {
 	var walsnap walpb.Snapshot
 	if snapshot != nil {
 		walsnap.Index, walsnap.Term = snapshot.Metadata.Index, snapshot.Metadata.Term
@@ -496,7 +487,7 @@ func restartNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types.ID, *member
 		zap.String("local-member-id", id.String()),
 		zap.Uint64("commit-index", st.Commit),
 	)
-	cl := membership.NewCluster(cfg.Logger, "")
+	cl := membership.NewCluster(cfg.Logger)
 	cl.SetID(id, cid)
 	s := raft.NewMemoryStorage()
 	if snapshot != nil {
@@ -514,17 +505,10 @@ func restartNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types.ID, *member
 		CheckQuorum:     true,
 		PreVote:         cfg.PreVote,
 	}
-	if cfg.Logger != nil {
-		// called after capnslog setting in "init" function
-		var err error
-		if cfg.LoggerConfig != nil {
-			c.Logger, err = NewRaftLogger(cfg.LoggerConfig)
-			if err != nil {
-				log.Fatalf("cannot create raft logger %v", err)
-			}
-		} else if cfg.LoggerCore != nil && cfg.LoggerWriteSyncer != nil {
-			c.Logger = NewRaftLoggerFromZapCore(cfg.LoggerCore, cfg.LoggerWriteSyncer)
-		}
+	var err error
+	c.Logger, err = getRaftLogger(cfg)
+	if err != nil {
+		log.Fatalf("cannot create raft logger %v", err)
 	}
 
 	n := raft.RestartNode(c)
@@ -534,7 +518,7 @@ func restartNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types.ID, *member
 	return id, cl, n, s, w
 }
 
-func restartAsStandaloneNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types.ID, *membership.RaftCluster, raft.Node, *raft.MemoryStorage, *wal.WAL) {
+func restartAsStandaloneNode(cfg config.ServerConfig, snapshot *raftpb.Snapshot) (types.ID, *membership.RaftCluster, raft.Node, *raft.MemoryStorage, *wal.WAL) {
 	var walsnap walpb.Snapshot
 	if snapshot != nil {
 		walsnap.Index, walsnap.Term = snapshot.Metadata.Index, snapshot.Metadata.Term
@@ -581,7 +565,7 @@ func restartAsStandaloneNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types
 		zap.Uint64("commit-index", st.Commit),
 	)
 
-	cl := membership.NewCluster(cfg.Logger, "")
+	cl := membership.NewCluster(cfg.Logger)
 	cl.SetID(id, cid)
 	s := raft.NewMemoryStorage()
 	if snapshot != nil {
@@ -599,21 +583,29 @@ func restartAsStandaloneNode(cfg ServerConfig, snapshot *raftpb.Snapshot) (types
 		CheckQuorum:     true,
 		PreVote:         cfg.PreVote,
 	}
-	if cfg.Logger != nil {
-		// called after capnslog setting in "init" function
-		if cfg.LoggerConfig != nil {
-			c.Logger, err = NewRaftLogger(cfg.LoggerConfig)
-			if err != nil {
-				log.Fatalf("cannot create raft logger %v", err)
-			}
-		} else if cfg.LoggerCore != nil && cfg.LoggerWriteSyncer != nil {
-			c.Logger = NewRaftLoggerFromZapCore(cfg.LoggerCore, cfg.LoggerWriteSyncer)
-		}
+
+	c.Logger, err = getRaftLogger(cfg)
+	if err != nil {
+		log.Fatalf("cannot create raft logger %v", err)
 	}
 
 	n := raft.RestartNode(c)
 	raftStatus = n.Status
 	return id, cl, n, s, w
+}
+
+func getRaftLogger(cfg config.ServerConfig) (raft.Logger, error) {
+	if cfg.Logger != nil {
+		// called after capnslog setting in "init" function
+		if cfg.LoggerConfig != nil {
+			return NewRaftLogger(cfg.LoggerConfig)
+		} else if cfg.LoggerCore != nil && cfg.LoggerWriteSyncer != nil {
+			return NewRaftLoggerFromZapCore(cfg.LoggerCore, cfg.LoggerWriteSyncer), nil
+		} else {
+			return NewRaftLoggerZap(cfg.Logger.Named("raft")), nil
+		}
+	}
+	return nil, nil
 }
 
 // getIDs returns an ordered set of IDs included in the given snapshot and

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build cov
 // +build cov
 
 package e2e
@@ -24,8 +25,8 @@ import (
 	"syscall"
 	"time"
 
+	"go.etcd.io/etcd/client/pkg/v3/fileutil"
 	"go.etcd.io/etcd/pkg/v3/expect"
-	"go.etcd.io/etcd/pkg/v3/fileutil"
 )
 
 const noOutputLineCount = 2 // cov-enabled binaries emit PASS and coverage count lines

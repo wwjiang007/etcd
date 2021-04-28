@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io/ioutil"
@@ -29,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	"go.etcd.io/etcd/pkg/v3/transport"
+	"go.etcd.io/etcd/client/pkg/v3/transport"
 
 	"go.uber.org/zap"
 )
@@ -52,6 +53,7 @@ func TestServer_Unix_Insecure_DelayTx(t *testing.T) { testServer(t, "unix", fals
 func TestServer_TCP_Insecure_DelayTx(t *testing.T)  { testServer(t, "tcp", false, true) }
 func TestServer_Unix_Secure_DelayTx(t *testing.T)   { testServer(t, "unix", true, true) }
 func TestServer_TCP_Secure_DelayTx(t *testing.T)    { testServer(t, "tcp", true, true) }
+
 func testServer(t *testing.T, scheme string, secure bool, delayTx bool) {
 	srcAddr, dstAddr := newUnixAddr(), newUnixAddr()
 	if scheme == "tcp" {
@@ -122,15 +124,15 @@ func testServer(t *testing.T, scheme string, secure bool, delayTx bool) {
 	}
 	took2 := time.Since(now)
 	if delayTx {
-		t.Logf("took %v with latency %v±%v", took2, lat, rv)
+		t.Logf("took %v with latency %v+-%v", took2, lat, rv)
 	} else {
 		t.Logf("took %v with no latency", took2)
 	}
 
 	if delayTx {
 		p.UndelayTx()
-		if took1 >= took2 {
-			t.Fatalf("expected took1 %v < took2 %v (with latency)", took1, took2)
+		if took2 < lat-rv {
+			t.Fatalf("expected took2 %v (with latency) > delay: %v", took2, lat-rv)
 		}
 	}
 
@@ -614,7 +616,7 @@ func send(t *testing.T, data []byte, scheme, addr string, tlsInfo transport.TLSI
 		if terr != nil {
 			t.Fatal(terr)
 		}
-		out, err = tp.Dial(scheme, addr)
+		out, err = tp.DialContext(context.Background(), scheme, addr)
 	} else {
 		out, err = net.Dial(scheme, addr)
 	}

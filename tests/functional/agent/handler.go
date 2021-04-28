@@ -25,7 +25,7 @@ import (
 	"syscall"
 	"time"
 
-	"go.etcd.io/etcd/pkg/v3/fileutil"
+	"go.etcd.io/etcd/client/pkg/v3/fileutil"
 	"go.etcd.io/etcd/pkg/v3/proxy"
 	"go.etcd.io/etcd/tests/v3/functional/rpcpb"
 
@@ -665,6 +665,7 @@ func (srv *Server) handle_SIGQUIT_ETCD_AND_ARCHIVE_DATA() (*rpcpb.Response, erro
 		}
 	}
 
+	// TODO: Verify whether this cleaning of 'cache pages' is needed.
 	srv.lg.Info("cleaning up page cache")
 	if err := cleanPageCache(); err != nil {
 		srv.lg.Warn("failed to clean up page cache", zap.String("error", err.Error()))

@@ -17,29 +17,30 @@ package snapshot_test
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
+	"go.etcd.io/etcd/client/pkg/v3/testutil"
 	"go.etcd.io/etcd/client/v3"
-	"go.etcd.io/etcd/pkg/v3/testutil"
 	"go.etcd.io/etcd/server/v3/embed"
 	"go.etcd.io/etcd/server/v3/etcdserver"
+	"go.etcd.io/etcd/tests/v3/integration"
 )
 
 // TestSnapshotV3RestoreMultiMemberAdd ensures that multiple members
 // can boot into the same cluster after being restored from a same
 // snapshot file, and also be able to add another member to the cluster.
 func TestSnapshotV3RestoreMultiMemberAdd(t *testing.T) {
+	integration.BeforeTest(t)
+
 	kvs := []kv{{"foo1", "bar1"}, {"foo2", "bar2"}, {"foo3", "bar3"}}
 	dbPath := createSnapshotFile(t, kvs)
 
 	clusterN := 3
 	cURLs, pURLs, srvs := restoreCluster(t, clusterN, dbPath)
+
 	defer func() {
 		for i := 0; i < clusterN; i++ {
-			os.RemoveAll(srvs[i].Config().Dir)
 			srvs[i].Close()
 		}
 	}()
@@ -62,10 +63,7 @@ func TestSnapshotV3RestoreMultiMemberAdd(t *testing.T) {
 	// wait for membership reconfiguration apply
 	time.Sleep(testutil.ApplyTimeout)
 
-	cfg := embed.NewConfig()
-	cfg.Logger = "zap"
-	cfg.LogOutputs = []string{"/dev/null"}
-	cfg.Name = "3"
+	cfg := integration.NewEmbedConfig(t, "3")
 	cfg.InitialClusterToken = testClusterTkn
 	cfg.ClusterState = "existing"
 	cfg.LCUrls, cfg.ACUrls = newCURLs, newCURLs
@@ -76,14 +74,12 @@ func TestSnapshotV3RestoreMultiMemberAdd(t *testing.T) {
 	}
 	cfg.InitialCluster = cfg.InitialCluster[1:]
 	cfg.InitialCluster += fmt.Sprintf(",%s=%s", cfg.Name, newPURLs[0].String())
-	cfg.Dir = filepath.Join(os.TempDir(), fmt.Sprint(time.Now().Nanosecond()))
 
 	srv, err := embed.StartEtcd(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		os.RemoveAll(cfg.Dir)
 		srv.Close()
 	}()
 	select {

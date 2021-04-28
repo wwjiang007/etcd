@@ -30,7 +30,6 @@ import (
 
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	"go.etcd.io/etcd/client/v3"
-	"go.etcd.io/etcd/pkg/v3/testutil"
 	"go.etcd.io/etcd/server/v3/lease"
 	"go.etcd.io/etcd/server/v3/mvcc"
 	"go.etcd.io/etcd/server/v3/mvcc/backend"
@@ -38,7 +37,7 @@ import (
 )
 
 func TestMaintenanceHashKV(t *testing.T) {
-	defer testutil.AfterTest(t)
+	integration.BeforeTest(t)
 
 	clus := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 3})
 	defer clus.Terminate(t)
@@ -71,7 +70,7 @@ func TestMaintenanceHashKV(t *testing.T) {
 }
 
 func TestMaintenanceMoveLeader(t *testing.T) {
-	defer testutil.AfterTest(t)
+	integration.BeforeTest(t)
 
 	clus := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 3})
 	defer clus.Terminate(t)
@@ -102,7 +101,7 @@ func TestMaintenanceMoveLeader(t *testing.T) {
 // TestMaintenanceSnapshotError ensures that context cancel/timeout
 // before snapshot reading returns corresponding context errors.
 func TestMaintenanceSnapshotError(t *testing.T) {
-	defer testutil.AfterTest(t)
+	integration.BeforeTest(t)
 
 	clus := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 1})
 	defer clus.Terminate(t)
@@ -133,7 +132,7 @@ func TestMaintenanceSnapshotError(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	_, err = io.Copy(ioutil.Discard, rc2)
-	if err != nil && !isClientTimeout(err) {
+	if err != nil && !IsClientTimeout(err) {
 		t.Errorf("expected client timeout, got %v", err)
 	}
 }
@@ -141,7 +140,7 @@ func TestMaintenanceSnapshotError(t *testing.T) {
 // TestMaintenanceSnapshotErrorInflight ensures that inflight context cancel/timeout
 // fails snapshot reading with corresponding context errors.
 func TestMaintenanceSnapshotErrorInflight(t *testing.T) {
-	defer testutil.AfterTest(t)
+	integration.BeforeTest(t)
 
 	clus := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 1})
 	defer clus.Terminate(t)
@@ -192,13 +191,13 @@ func TestMaintenanceSnapshotErrorInflight(t *testing.T) {
 	// 300ms left and expect timeout while snapshot reading is in progress
 	time.Sleep(700 * time.Millisecond)
 	_, err = io.Copy(ioutil.Discard, rc2)
-	if err != nil && !isClientTimeout(err) {
+	if err != nil && !IsClientTimeout(err) {
 		t.Errorf("expected client timeout, got %v", err)
 	}
 }
 
 func TestMaintenanceStatus(t *testing.T) {
-	defer testutil.AfterTest(t)
+	integration.BeforeTest(t)
 
 	clus := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 3})
 	defer clus.Terminate(t)

@@ -35,6 +35,8 @@ var (
 	ErrGRPCLeaseExist       = status.New(codes.FailedPrecondition, "etcdserver: lease already exists").Err()
 	ErrGRPCLeaseTTLTooLarge = status.New(codes.OutOfRange, "etcdserver: too large lease TTL").Err()
 
+	ErrGRPCWatchCanceled = status.New(codes.Canceled, "etcdserver: watch canceled").Err()
+
 	ErrGRPCMemberExist            = status.New(codes.FailedPrecondition, "etcdserver: member ID already exist").Err()
 	ErrGRPCPeerURLExist           = status.New(codes.FailedPrecondition, "etcdserver: Peer URLs already exists").Err()
 	ErrGRPCMemberNotEnoughStarted = status.New(codes.FailedPrecondition, "etcdserver: re-configuration failed due to not enough started members").Err()
@@ -81,6 +83,9 @@ var (
 	ErrGRPCInvalidDowngradeTargetVersion = status.New(codes.InvalidArgument, "etcdserver: invalid downgrade target version").Err()
 	ErrGRPCDowngradeInProcess            = status.New(codes.FailedPrecondition, "etcdserver: cluster has a downgrade job in progress").Err()
 	ErrGRPCNoInflightDowngrade           = status.New(codes.FailedPrecondition, "etcdserver: no inflight downgrade job").Err()
+
+	ErrGRPCCanceled         = status.New(codes.Canceled, "etcdserver: request canceled").Err()
+	ErrGRPCDeadlineExceeded = status.New(codes.DeadlineExceeded, "etcdserver: context deadline exceeded").Err()
 
 	errStringToError = map[string]error{
 		ErrorDesc(ErrGRPCEmptyKey):      ErrGRPCEmptyKey,

@@ -16,7 +16,6 @@ package e2e
 
 import (
 	"fmt"
-	"io/ioutil"
 	"net/url"
 	"os"
 	"strings"
@@ -171,7 +170,7 @@ type etcdProcessClusterConfig struct {
 func newEtcdProcessCluster(t testing.TB, cfg *etcdProcessClusterConfig) (*etcdProcessCluster, error) {
 	skipInShortMode(t)
 
-	etcdCfgs := cfg.etcdServerProcessConfigs()
+	etcdCfgs := cfg.etcdServerProcessConfigs(t)
 	epc := &etcdProcessCluster{
 		cfg:   cfg,
 		procs: make([]etcdProcess, cfg.clusterSize),
@@ -182,18 +181,18 @@ func newEtcdProcessCluster(t testing.TB, cfg *etcdProcessClusterConfig) (*etcdPr
 		proc, err := newEtcdProcess(etcdCfgs[i])
 		if err != nil {
 			epc.Close()
-			return nil, err
+			return nil, fmt.Errorf("Cannot configure: %v", err)
 		}
 		epc.procs[i] = proc
 	}
 
 	if cfg.rollingStart {
 		if err := epc.RollingStart(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("Cannot rolling-start: %v", err)
 		}
 	} else {
 		if err := epc.Start(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("Cannot start: %v", err)
 		}
 	}
 	return epc, nil
@@ -217,7 +216,7 @@ func (cfg *etcdProcessClusterConfig) peerScheme() string {
 	return peerScheme
 }
 
-func (cfg *etcdProcessClusterConfig) etcdServerProcessConfigs() []*etcdServerProcessConfig {
+func (cfg *etcdProcessClusterConfig) etcdServerProcessConfigs(tb testing.TB) []*etcdServerProcessConfig {
 	if cfg.basePort == 0 {
 		cfg.basePort = etcdProcessBasePort
 	}
@@ -247,14 +246,10 @@ func (cfg *etcdProcessClusterConfig) etcdServerProcessConfigs() []*etcdServerPro
 		}
 
 		purl := url.URL{Scheme: cfg.peerScheme(), Host: fmt.Sprintf("localhost:%d", port+1)}
-		name := fmt.Sprintf("testname%d", i)
+		name := fmt.Sprintf("test-%s-%d", tb.Name(), i)
 		dataDirPath := cfg.dataDirPath
 		if cfg.dataDirPath == "" {
-			var derr error
-			dataDirPath, derr = ioutil.TempDir("", name+".etcd")
-			if derr != nil {
-				panic(fmt.Sprintf("could not get tempdir for datadir: %s", derr))
-			}
+			dataDirPath = tb.TempDir()
 		}
 		initialCluster[i] = fmt.Sprintf("%s=%s", name, purl.String())
 
