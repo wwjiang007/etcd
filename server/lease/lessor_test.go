@@ -28,6 +28,7 @@ import (
 
 	pb "go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/server/v3/mvcc/backend"
+	"go.etcd.io/etcd/server/v3/mvcc/buckets"
 	"go.uber.org/zap"
 )
 
@@ -45,7 +46,7 @@ func TestLessorGrant(t *testing.T) {
 	defer os.RemoveAll(dir)
 	defer be.Close()
 
-	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL}, nil)
+	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL})
 	defer le.Stop()
 	le.Promote(0)
 
@@ -91,12 +92,13 @@ func TestLessorGrant(t *testing.T) {
 		}
 	}
 
-	be.BatchTx().Lock()
-	_, vs := be.BatchTx().UnsafeRange(leaseBucketName, int64ToBytes(int64(l.ID)), nil, 0)
-	if len(vs) != 1 {
-		t.Errorf("len(vs) = %d, want 1", len(vs))
+	tx := be.BatchTx()
+	tx.Lock()
+	defer tx.Unlock()
+	lpb := buckets.MustUnsafeGetLease(tx, int64(l.ID))
+	if lpb == nil {
+		t.Errorf("lpb = %d, want not nil", lpb)
 	}
-	be.BatchTx().Unlock()
 }
 
 // TestLeaseConcurrentKeys ensures Lease.Keys method calls are guarded
@@ -107,7 +109,7 @@ func TestLeaseConcurrentKeys(t *testing.T) {
 	defer os.RemoveAll(dir)
 	defer be.Close()
 
-	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL}, nil)
+	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL})
 	defer le.Stop()
 	le.SetRangeDeleter(func() TxnDelete { return newFakeDeleter(be) })
 
@@ -156,7 +158,7 @@ func TestLessorRevoke(t *testing.T) {
 	defer os.RemoveAll(dir)
 	defer be.Close()
 
-	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL}, nil)
+	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL})
 	defer le.Stop()
 	var fd *fakeDeleter
 	le.SetRangeDeleter(func() TxnDelete {
@@ -194,12 +196,13 @@ func TestLessorRevoke(t *testing.T) {
 		t.Errorf("deleted= %v, want %v", fd.deleted, wdeleted)
 	}
 
-	be.BatchTx().Lock()
-	_, vs := be.BatchTx().UnsafeRange(leaseBucketName, int64ToBytes(int64(l.ID)), nil, 0)
-	if len(vs) != 0 {
-		t.Errorf("len(vs) = %d, want 0", len(vs))
+	tx := be.BatchTx()
+	tx.Lock()
+	defer tx.Unlock()
+	lpb := buckets.MustUnsafeGetLease(tx, int64(l.ID))
+	if lpb != nil {
+		t.Errorf("lpb = %d, want nil", lpb)
 	}
-	be.BatchTx().Unlock()
 }
 
 // TestLessorRenew ensures Lessor can renew an existing lease.
@@ -209,7 +212,7 @@ func TestLessorRenew(t *testing.T) {
 	defer be.Close()
 	defer os.RemoveAll(dir)
 
-	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL}, nil)
+	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL})
 	defer le.Stop()
 	le.Promote(0)
 
@@ -242,7 +245,7 @@ func TestLessorRenewWithCheckpointer(t *testing.T) {
 	defer be.Close()
 	defer os.RemoveAll(dir)
 
-	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL}, nil)
+	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL})
 	fakerCheckerpointer := func(ctx context.Context, cp *pb.LeaseCheckpointRequest) {
 		for _, cp := range cp.GetCheckpoints() {
 			le.Checkpoint(LeaseID(cp.GetID()), cp.GetRemaining_TTL())
@@ -291,7 +294,7 @@ func TestLessorRenewExtendPileup(t *testing.T) {
 	dir, be := NewTestBackend(t)
 	defer os.RemoveAll(dir)
 
-	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL}, nil)
+	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL})
 	ttl := int64(10)
 	for i := 1; i <= leaseRevokeRate*10; i++ {
 		if _, err := le.Grant(LeaseID(2*i), ttl); err != nil {
@@ -310,7 +313,7 @@ func TestLessorRenewExtendPileup(t *testing.T) {
 	bcfg.Path = filepath.Join(dir, "be")
 	be = backend.New(bcfg)
 	defer be.Close()
-	le = newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL}, nil)
+	le = newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL})
 	defer le.Stop()
 
 	// extend after recovery should extend expiration on lease pile-up
@@ -340,7 +343,7 @@ func TestLessorDetach(t *testing.T) {
 	defer os.RemoveAll(dir)
 	defer be.Close()
 
-	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL}, nil)
+	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL})
 	defer le.Stop()
 	le.SetRangeDeleter(func() TxnDelete { return newFakeDeleter(be) })
 
@@ -381,7 +384,7 @@ func TestLessorRecover(t *testing.T) {
 	defer os.RemoveAll(dir)
 	defer be.Close()
 
-	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL}, nil)
+	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL})
 	defer le.Stop()
 	l1, err1 := le.Grant(1, 10)
 	l2, err2 := le.Grant(2, 20)
@@ -390,7 +393,7 @@ func TestLessorRecover(t *testing.T) {
 	}
 
 	// Create a new lessor with the same backend
-	nle := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL}, nil)
+	nle := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL})
 	defer nle.Stop()
 	nl1 := nle.Lookup(l1.ID)
 	if nl1 == nil || nl1.ttl != l1.ttl {
@@ -411,7 +414,7 @@ func TestLessorExpire(t *testing.T) {
 
 	testMinTTL := int64(1)
 
-	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: testMinTTL}, nil)
+	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: testMinTTL})
 	defer le.Stop()
 
 	le.Promote(1 * time.Second)
@@ -464,7 +467,7 @@ func TestLessorExpireAndDemote(t *testing.T) {
 
 	testMinTTL := int64(1)
 
-	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: testMinTTL}, nil)
+	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: testMinTTL})
 	defer le.Stop()
 
 	le.Promote(1 * time.Second)
@@ -513,7 +516,7 @@ func TestLessorMaxTTL(t *testing.T) {
 	defer os.RemoveAll(dir)
 	defer be.Close()
 
-	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL}, nil)
+	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL})
 	defer le.Stop()
 
 	_, err := le.Grant(1, MaxLeaseTTL+1)
@@ -529,7 +532,7 @@ func TestLessorCheckpointScheduling(t *testing.T) {
 	defer os.RemoveAll(dir)
 	defer be.Close()
 
-	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL, CheckpointInterval: 1 * time.Second}, nil)
+	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL, CheckpointInterval: 1 * time.Second})
 	le.minLeaseTTL = 1
 	checkpointedC := make(chan struct{})
 	le.SetCheckpointer(func(ctx context.Context, lc *pb.LeaseCheckpointRequest) {
@@ -564,7 +567,7 @@ func TestLessorCheckpointsRestoredOnPromote(t *testing.T) {
 	defer os.RemoveAll(dir)
 	defer be.Close()
 
-	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL}, nil)
+	le := newLessor(lg, be, LessorConfig{MinLeaseTTL: minLeaseTTL})
 	defer le.Stop()
 	l, err := le.Grant(1, 10)
 	if err != nil {

@@ -16,8 +16,11 @@ package embed
 
 import (
 	"crypto/tls"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
+	"net/url"
 	"os"
 
 	"go.etcd.io/etcd/client/pkg/v3/logutil"
@@ -26,6 +29,7 @@ import (
 	"go.uber.org/zap/zapgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/grpclog"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 // GetLogger returns the logger.
@@ -54,6 +58,11 @@ func (cfg *Config) setupLogging() error {
 				}
 			}
 		}
+		if cfg.EnableLogRotation {
+			if err := setupLogRotation(cfg.LogOutputs, cfg.LogRotationConfigJSON); err != nil {
+				return err
+			}
+		}
 
 		outputPaths, errOutputPaths := make([]string, 0), make([]string, 0)
 		isJournal := false
@@ -75,8 +84,19 @@ func (cfg *Config) setupLogging() error {
 				errOutputPaths = append(errOutputPaths, StdOutLogOutput)
 
 			default:
-				outputPaths = append(outputPaths, v)
-				errOutputPaths = append(errOutputPaths, v)
+				var path string
+				if cfg.EnableLogRotation {
+					// append rotate scheme to logs managed by lumberjack log rotation
+					if v[0:1] == "/" {
+						path = fmt.Sprintf("rotate:/%%2F%s", v[1:])
+					} else {
+						path = fmt.Sprintf("rotate:/%s", v)
+					}
+				} else {
+					path = v
+				}
+				outputPaths = append(outputPaths, path)
+				errOutputPaths = append(errOutputPaths, path)
 			}
 		}
 
@@ -87,19 +107,11 @@ func (cfg *Config) setupLogging() error {
 			copied = logutil.MergeOutputPaths(copied)
 			copied.Level = zap.NewAtomicLevelAt(logutil.ConvertToZapLevel(cfg.LogLevel))
 			if cfg.ZapLoggerBuilder == nil {
-				cfg.ZapLoggerBuilder = func(c *Config) error {
-					var err error
-					c.logger, err = copied.Build()
-					if err != nil {
-						return err
-					}
-					c.loggerMu.Lock()
-					defer c.loggerMu.Unlock()
-					c.loggerConfig = &copied
-					c.loggerCore = nil
-					c.loggerWriteSyncer = nil
-					return nil
+				lg, err := copied.Build()
+				if err != nil {
+					return err
 				}
+				cfg.ZapLoggerBuilder = NewZapLoggerBuilder(lg)
 			}
 		} else {
 			if len(cfg.LogOutputs) > 1 {
@@ -126,16 +138,7 @@ func (cfg *Config) setupLogging() error {
 				lvl,
 			)
 			if cfg.ZapLoggerBuilder == nil {
-				cfg.ZapLoggerBuilder = func(c *Config) error {
-					c.logger = zap.New(cr, zap.AddCaller(), zap.ErrorOutput(syncer))
-					c.loggerMu.Lock()
-					defer c.loggerMu.Unlock()
-					c.loggerConfig = nil
-					c.loggerCore = cr
-					c.loggerWriteSyncer = syncer
-
-					return nil
-				}
+				cfg.ZapLoggerBuilder = NewZapLoggerBuilder(zap.New(cr, zap.AddCaller(), zap.ErrorOutput(syncer)))
 			}
 		}
 
@@ -181,17 +184,21 @@ func (cfg *Config) setupLogging() error {
 	return nil
 }
 
-// NewZapCoreLoggerBuilder generates a zap core logger builder.
-func NewZapCoreLoggerBuilder(lg *zap.Logger) func(*Config) error {
+// NewZapLoggerBuilder generates a zap logger builder that sets given loger
+// for embedded etcd.
+func NewZapLoggerBuilder(lg *zap.Logger) func(*Config) error {
 	return func(cfg *Config) error {
 		cfg.loggerMu.Lock()
 		defer cfg.loggerMu.Unlock()
 		cfg.logger = lg
-		cfg.loggerConfig = nil
-		cfg.loggerCore = nil
-		cfg.loggerWriteSyncer = nil
 		return nil
 	}
+}
+
+// NewZapCoreLoggerBuilder - is a deprecated setter for the logger.
+// Deprecated: Use simpler NewZapLoggerBuilder. To be removed in etcd-3.6.
+func NewZapCoreLoggerBuilder(lg *zap.Logger, _ zapcore.Core, _ zapcore.WriteSyncer) func(*Config) error {
+	return NewZapLoggerBuilder(lg)
 }
 
 // SetupGlobalLoggers configures 'global' loggers (grpc, zapGlobal) based on the cfg.
@@ -210,4 +217,49 @@ func (cfg *Config) SetupGlobalLoggers() {
 		}
 		zap.ReplaceGlobals(lg)
 	}
+}
+
+type logRotationConfig struct {
+	*lumberjack.Logger
+}
+
+// Sync implements zap.Sink
+func (logRotationConfig) Sync() error { return nil }
+
+// setupLogRotation initializes log rotation for a single file path target.
+func setupLogRotation(logOutputs []string, logRotateConfigJSON string) error {
+	var logRotationConfig logRotationConfig
+	outputFilePaths := 0
+	for _, v := range logOutputs {
+		switch v {
+		case DefaultLogOutput, StdErrLogOutput, StdOutLogOutput:
+			continue
+		default:
+			outputFilePaths++
+		}
+	}
+	// log rotation requires file target
+	if len(logOutputs) == 1 && outputFilePaths == 0 {
+		return ErrLogRotationInvalidLogOutput
+	}
+	// support max 1 file target for log rotation
+	if outputFilePaths > 1 {
+		return ErrLogRotationInvalidLogOutput
+	}
+
+	if err := json.Unmarshal([]byte(logRotateConfigJSON), &logRotationConfig); err != nil {
+		var unmarshalTypeError *json.UnmarshalTypeError
+		var syntaxError *json.SyntaxError
+		switch {
+		case errors.As(err, &syntaxError):
+			return fmt.Errorf("improperly formatted log rotation config: %w", err)
+		case errors.As(err, &unmarshalTypeError):
+			return fmt.Errorf("invalid log rotation config: %w", err)
+		}
+	}
+	zap.RegisterSink("rotate", func(u *url.URL) (zap.Sink, error) {
+		logRotationConfig.Filename = u.Path[1:]
+		return &logRotationConfig, nil
+	})
+	return nil
 }

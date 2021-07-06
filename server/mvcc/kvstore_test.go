@@ -37,13 +37,14 @@ import (
 	"go.etcd.io/etcd/server/v3/lease"
 	"go.etcd.io/etcd/server/v3/mvcc/backend"
 	betesting "go.etcd.io/etcd/server/v3/mvcc/backend/testing"
+	"go.etcd.io/etcd/server/v3/mvcc/buckets"
 
 	"go.uber.org/zap"
 )
 
 func TestStoreRev(t *testing.T) {
 	b, _ := betesting.NewDefaultTmpBackend(t)
-	s := NewStore(zap.NewExample(), b, &lease.FakeLessor{}, nil, StoreConfig{})
+	s := NewStore(zap.NewExample(), b, &lease.FakeLessor{}, StoreConfig{})
 	defer s.Close()
 
 	for i := 1; i <= 3; i++ {
@@ -148,12 +149,12 @@ func TestStorePut(t *testing.T) {
 		}
 
 		wact := []testutil.Action{
-			{Name: "seqput", Params: []interface{}{keyBucketName, tt.wkey, data}},
+			{Name: "seqput", Params: []interface{}{buckets.Key, tt.wkey, data}},
 		}
 
 		if tt.rr != nil {
 			wact = []testutil.Action{
-				{Name: "seqput", Params: []interface{}{keyBucketName, tt.wkey, data}},
+				{Name: "seqput", Params: []interface{}{buckets.Key, tt.wkey, data}},
 			}
 		}
 
@@ -228,7 +229,7 @@ func TestStoreRange(t *testing.T) {
 		wstart := newRevBytes()
 		revToBytes(tt.idxr.revs[0], wstart)
 		wact := []testutil.Action{
-			{Name: "range", Params: []interface{}{keyBucketName, wstart, []byte(nil), int64(0)}},
+			{Name: "range", Params: []interface{}{buckets.Key, wstart, []byte(nil), int64(0)}},
 		}
 		if g := b.tx.Action(); !reflect.DeepEqual(g, wact) {
 			t.Errorf("#%d: tx action = %+v, want %+v", i, g, wact)
@@ -303,7 +304,7 @@ func TestStoreDeleteRange(t *testing.T) {
 			t.Errorf("#%d: marshal err = %v, want nil", i, err)
 		}
 		wact := []testutil.Action{
-			{Name: "seqput", Params: []interface{}{keyBucketName, tt.wkey, data}},
+			{Name: "seqput", Params: []interface{}{buckets.Key, tt.wkey, data}},
 		}
 		if g := b.tx.Action(); !reflect.DeepEqual(g, wact) {
 			t.Errorf("#%d: tx action = %+v, want %+v", i, g, wact)
@@ -342,10 +343,10 @@ func TestStoreCompact(t *testing.T) {
 	end := make([]byte, 8)
 	binary.BigEndian.PutUint64(end, uint64(4))
 	wact := []testutil.Action{
-		{Name: "put", Params: []interface{}{metaBucketName, scheduledCompactKeyName, newTestRevBytes(revision{3, 0})}},
-		{Name: "range", Params: []interface{}{keyBucketName, make([]byte, 17), end, int64(10000)}},
-		{Name: "delete", Params: []interface{}{keyBucketName, key2}},
-		{Name: "put", Params: []interface{}{metaBucketName, finishedCompactKeyName, newTestRevBytes(revision{3, 0})}},
+		{Name: "put", Params: []interface{}{buckets.Meta, buckets.ScheduledCompactKeyName, newTestRevBytes(revision{3, 0})}},
+		{Name: "range", Params: []interface{}{buckets.Key, make([]byte, 17), end, int64(10000)}},
+		{Name: "delete", Params: []interface{}{buckets.Key, key2}},
+		{Name: "put", Params: []interface{}{buckets.Meta, buckets.FinishedCompactKeyName, newTestRevBytes(revision{3, 0})}},
 	}
 	if g := b.tx.Action(); !reflect.DeepEqual(g, wact) {
 		t.Errorf("tx actions = %+v, want %+v", g, wact)
@@ -383,8 +384,8 @@ func TestStoreRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b.tx.rangeRespc <- rangeResp{[][]byte{finishedCompactKeyName}, [][]byte{newTestRevBytes(revision{3, 0})}}
-	b.tx.rangeRespc <- rangeResp{[][]byte{scheduledCompactKeyName}, [][]byte{newTestRevBytes(revision{3, 0})}}
+	b.tx.rangeRespc <- rangeResp{[][]byte{buckets.FinishedCompactKeyName}, [][]byte{newTestRevBytes(revision{3, 0})}}
+	b.tx.rangeRespc <- rangeResp{[][]byte{buckets.ScheduledCompactKeyName}, [][]byte{newTestRevBytes(revision{3, 0})}}
 
 	b.tx.rangeRespc <- rangeResp{[][]byte{putkey, delkey}, [][]byte{putkvb, delkvb}}
 	b.tx.rangeRespc <- rangeResp{nil, nil}
@@ -398,9 +399,9 @@ func TestStoreRestore(t *testing.T) {
 		t.Errorf("current rev = %v, want 5", s.currentRev)
 	}
 	wact := []testutil.Action{
-		{Name: "range", Params: []interface{}{metaBucketName, finishedCompactKeyName, []byte(nil), int64(0)}},
-		{Name: "range", Params: []interface{}{metaBucketName, scheduledCompactKeyName, []byte(nil), int64(0)}},
-		{Name: "range", Params: []interface{}{keyBucketName, newTestRevBytes(revision{1, 0}), newTestRevBytes(revision{math.MaxInt64, math.MaxInt64}), int64(restoreChunkKeys)}},
+		{Name: "range", Params: []interface{}{buckets.Meta, buckets.FinishedCompactKeyName, []byte(nil), int64(0)}},
+		{Name: "range", Params: []interface{}{buckets.Meta, buckets.ScheduledCompactKeyName, []byte(nil), int64(0)}},
+		{Name: "range", Params: []interface{}{buckets.Key, newTestRevBytes(revision{1, 0}), newTestRevBytes(revision{math.MaxInt64, math.MaxInt64}), int64(restoreChunkKeys)}},
 	}
 	if g := b.tx.Action(); !reflect.DeepEqual(g, wact) {
 		t.Errorf("tx actions = %+v, want %+v", g, wact)
@@ -426,7 +427,7 @@ func TestRestoreDelete(t *testing.T) {
 	defer func() { restoreChunkKeys = oldChunk }()
 
 	b, _ := betesting.NewDefaultTmpBackend(t)
-	s := NewStore(zap.NewExample(), b, &lease.FakeLessor{}, nil, StoreConfig{})
+	s := NewStore(zap.NewExample(), b, &lease.FakeLessor{}, StoreConfig{})
 
 	keys := make(map[string]struct{})
 	for i := 0; i < 20; i++ {
@@ -451,7 +452,7 @@ func TestRestoreDelete(t *testing.T) {
 	}
 	s.Close()
 
-	s = NewStore(zap.NewExample(), b, &lease.FakeLessor{}, nil, StoreConfig{})
+	s = NewStore(zap.NewExample(), b, &lease.FakeLessor{}, StoreConfig{})
 	defer s.Close()
 	for i := 0; i < 20; i++ {
 		ks := fmt.Sprintf("foo-%d", i)
@@ -473,7 +474,7 @@ func TestRestoreContinueUnfinishedCompaction(t *testing.T) {
 	tests := []string{"recreate", "restore"}
 	for _, test := range tests {
 		b, _ := betesting.NewDefaultTmpBackend(t)
-		s0 := NewStore(zap.NewExample(), b, &lease.FakeLessor{}, nil, StoreConfig{})
+		s0 := NewStore(zap.NewExample(), b, &lease.FakeLessor{}, StoreConfig{})
 
 		s0.Put([]byte("foo"), []byte("bar"), lease.NoLease)
 		s0.Put([]byte("foo"), []byte("bar1"), lease.NoLease)
@@ -484,7 +485,7 @@ func TestRestoreContinueUnfinishedCompaction(t *testing.T) {
 		revToBytes(revision{main: 2}, rbytes)
 		tx := s0.b.BatchTx()
 		tx.Lock()
-		tx.UnsafePut(metaBucketName, scheduledCompactKeyName, rbytes)
+		tx.UnsafePut(buckets.Meta, buckets.ScheduledCompactKeyName, rbytes)
 		tx.Unlock()
 
 		s0.Close()
@@ -492,7 +493,7 @@ func TestRestoreContinueUnfinishedCompaction(t *testing.T) {
 		var s *store
 		switch test {
 		case "recreate":
-			s = NewStore(zap.NewExample(), b, &lease.FakeLessor{}, nil, StoreConfig{})
+			s = NewStore(zap.NewExample(), b, &lease.FakeLessor{}, StoreConfig{})
 		case "restore":
 			s0.Restore(b)
 			s = s0
@@ -511,9 +512,9 @@ func TestRestoreContinueUnfinishedCompaction(t *testing.T) {
 		// The disk compaction is done asynchronously and requires more time on slow disk.
 		// try 5 times for CI with slow IO.
 		for i := 0; i < 5; i++ {
-			tx = s.b.BatchTx()
+			tx := s.b.BatchTx()
 			tx.Lock()
-			ks, _ := tx.UnsafeRange(keyBucketName, revbytes, nil, 0)
+			ks, _ := tx.UnsafeRange(buckets.Key, revbytes, nil, 0)
 			tx.Unlock()
 			if len(ks) != 0 {
 				time.Sleep(100 * time.Millisecond)
@@ -534,7 +535,7 @@ type hashKVResult struct {
 // TestHashKVWhenCompacting ensures that HashKV returns correct hash when compacting.
 func TestHashKVWhenCompacting(t *testing.T) {
 	b, tmpPath := betesting.NewDefaultTmpBackend(t)
-	s := NewStore(zap.NewExample(), b, &lease.FakeLessor{}, nil, StoreConfig{})
+	s := NewStore(zap.NewExample(), b, &lease.FakeLessor{}, StoreConfig{})
 	defer os.Remove(tmpPath)
 
 	rev := 10000
@@ -602,7 +603,7 @@ func TestHashKVWhenCompacting(t *testing.T) {
 // correct hash value with latest revision.
 func TestHashKVZeroRevision(t *testing.T) {
 	b, tmpPath := betesting.NewDefaultTmpBackend(t)
-	s := NewStore(zap.NewExample(), b, &lease.FakeLessor{}, nil, StoreConfig{})
+	s := NewStore(zap.NewExample(), b, &lease.FakeLessor{}, StoreConfig{})
 	defer os.Remove(tmpPath)
 
 	rev := 10000
@@ -635,7 +636,7 @@ func TestTxnPut(t *testing.T) {
 	vals := createBytesSlice(bytesN, sliceN)
 
 	b, tmpPath := betesting.NewDefaultTmpBackend(t)
-	s := NewStore(zap.NewExample(), b, &lease.FakeLessor{}, nil, StoreConfig{})
+	s := NewStore(zap.NewExample(), b, &lease.FakeLessor{}, StoreConfig{})
 	defer cleanup(s, b, tmpPath)
 
 	for i := 0; i < sliceN; i++ {
@@ -651,14 +652,14 @@ func TestTxnPut(t *testing.T) {
 // TestConcurrentReadNotBlockingWrite ensures Read does not blocking Write after its creation
 func TestConcurrentReadNotBlockingWrite(t *testing.T) {
 	b, tmpPath := betesting.NewDefaultTmpBackend(t)
-	s := NewStore(zap.NewExample(), b, &lease.FakeLessor{}, nil, StoreConfig{})
+	s := NewStore(zap.NewExample(), b, &lease.FakeLessor{}, StoreConfig{})
 	defer os.Remove(tmpPath)
 
 	// write something to read later
 	s.Put([]byte("foo"), []byte("bar"), lease.NoLease)
 
 	// readTx simulates a long read request
-	readTx1 := s.Read(traceutil.TODO())
+	readTx1 := s.Read(ConcurrentReadTxMode, traceutil.TODO())
 
 	// write should not be blocked by reads
 	done := make(chan struct{}, 1)
@@ -673,7 +674,7 @@ func TestConcurrentReadNotBlockingWrite(t *testing.T) {
 	}
 
 	// readTx2 simulates a short read request
-	readTx2 := s.Read(traceutil.TODO())
+	readTx2 := s.Read(ConcurrentReadTxMode, traceutil.TODO())
 	ro := RangeOptions{Limit: 1, Rev: 0, Count: false}
 	ret, err := readTx2.Range(context.TODO(), []byte("foo"), nil, ro)
 	if err != nil {
@@ -720,7 +721,7 @@ func TestConcurrentReadTxAndWrite(t *testing.T) {
 		mu                   sync.Mutex // mu protects committedKVs
 	)
 	b, tmpPath := betesting.NewDefaultTmpBackend(t)
-	s := NewStore(zap.NewExample(), b, &lease.FakeLessor{}, nil, StoreConfig{})
+	s := NewStore(zap.NewExample(), b, &lease.FakeLessor{}, StoreConfig{})
 	defer os.Remove(tmpPath)
 
 	var wg sync.WaitGroup
@@ -756,7 +757,7 @@ func TestConcurrentReadTxAndWrite(t *testing.T) {
 			mu.Lock()
 			wKVs := make(kvs, len(committedKVs))
 			copy(wKVs, committedKVs)
-			tx := s.Read(traceutil.TODO())
+			tx := s.Read(ConcurrentReadTxMode, traceutil.TODO())
 			mu.Unlock()
 			// get all keys in backend store, and compare with wKVs
 			ret, err := tx.Range(context.TODO(), []byte("\x00000000"), []byte("\xffffffff"), RangeOptions{})
@@ -870,27 +871,27 @@ type fakeBatchTx struct {
 	rangeRespc chan rangeResp
 }
 
-func (b *fakeBatchTx) Lock()                          {}
-func (b *fakeBatchTx) Unlock()                        {}
-func (b *fakeBatchTx) RLock()                         {}
-func (b *fakeBatchTx) RUnlock()                       {}
-func (b *fakeBatchTx) UnsafeCreateBucket(name []byte) {}
-func (b *fakeBatchTx) UnsafeDeleteBucket(name []byte) {}
-func (b *fakeBatchTx) UnsafePut(bucketName []byte, key []byte, value []byte) {
-	b.Recorder.Record(testutil.Action{Name: "put", Params: []interface{}{bucketName, key, value}})
+func (b *fakeBatchTx) Lock()                                    {}
+func (b *fakeBatchTx) Unlock()                                  {}
+func (b *fakeBatchTx) RLock()                                   {}
+func (b *fakeBatchTx) RUnlock()                                 {}
+func (b *fakeBatchTx) UnsafeCreateBucket(bucket backend.Bucket) {}
+func (b *fakeBatchTx) UnsafeDeleteBucket(bucket backend.Bucket) {}
+func (b *fakeBatchTx) UnsafePut(bucket backend.Bucket, key []byte, value []byte) {
+	b.Recorder.Record(testutil.Action{Name: "put", Params: []interface{}{bucket, key, value}})
 }
-func (b *fakeBatchTx) UnsafeSeqPut(bucketName []byte, key []byte, value []byte) {
-	b.Recorder.Record(testutil.Action{Name: "seqput", Params: []interface{}{bucketName, key, value}})
+func (b *fakeBatchTx) UnsafeSeqPut(bucket backend.Bucket, key []byte, value []byte) {
+	b.Recorder.Record(testutil.Action{Name: "seqput", Params: []interface{}{bucket, key, value}})
 }
-func (b *fakeBatchTx) UnsafeRange(bucketName []byte, key, endKey []byte, limit int64) (keys [][]byte, vals [][]byte) {
-	b.Recorder.Record(testutil.Action{Name: "range", Params: []interface{}{bucketName, key, endKey, limit}})
+func (b *fakeBatchTx) UnsafeRange(bucket backend.Bucket, key, endKey []byte, limit int64) (keys [][]byte, vals [][]byte) {
+	b.Recorder.Record(testutil.Action{Name: "range", Params: []interface{}{bucket, key, endKey, limit}})
 	r := <-b.rangeRespc
 	return r.keys, r.vals
 }
-func (b *fakeBatchTx) UnsafeDelete(bucketName []byte, key []byte) {
-	b.Recorder.Record(testutil.Action{Name: "delete", Params: []interface{}{bucketName, key}})
+func (b *fakeBatchTx) UnsafeDelete(bucket backend.Bucket, key []byte) {
+	b.Recorder.Record(testutil.Action{Name: "delete", Params: []interface{}{bucket, key}})
 }
-func (b *fakeBatchTx) UnsafeForEach(bucketName []byte, visitor func(k, v []byte) error) error {
+func (b *fakeBatchTx) UnsafeForEach(bucket backend.Bucket, visitor func(k, v []byte) error) error {
 	return nil
 }
 func (b *fakeBatchTx) Commit()        {}
@@ -900,17 +901,17 @@ type fakeBackend struct {
 	tx *fakeBatchTx
 }
 
-func (b *fakeBackend) BatchTx() backend.BatchTx                                    { return b.tx }
-func (b *fakeBackend) ReadTx() backend.ReadTx                                      { return b.tx }
-func (b *fakeBackend) ConcurrentReadTx() backend.ReadTx                            { return b.tx }
-func (b *fakeBackend) Hash(ignores map[backend.IgnoreKey]struct{}) (uint32, error) { return 0, nil }
-func (b *fakeBackend) Size() int64                                                 { return 0 }
-func (b *fakeBackend) SizeInUse() int64                                            { return 0 }
-func (b *fakeBackend) OpenReadTxN() int64                                          { return 0 }
-func (b *fakeBackend) Snapshot() backend.Snapshot                                  { return nil }
-func (b *fakeBackend) ForceCommit()                                                {}
-func (b *fakeBackend) Defrag() error                                               { return nil }
-func (b *fakeBackend) Close() error                                                { return nil }
+func (b *fakeBackend) BatchTx() backend.BatchTx                                   { return b.tx }
+func (b *fakeBackend) ReadTx() backend.ReadTx                                     { return b.tx }
+func (b *fakeBackend) ConcurrentReadTx() backend.ReadTx                           { return b.tx }
+func (b *fakeBackend) Hash(func(bucketName, keyName []byte) bool) (uint32, error) { return 0, nil }
+func (b *fakeBackend) Size() int64                                                { return 0 }
+func (b *fakeBackend) SizeInUse() int64                                           { return 0 }
+func (b *fakeBackend) OpenReadTxN() int64                                         { return 0 }
+func (b *fakeBackend) Snapshot() backend.Snapshot                                 { return nil }
+func (b *fakeBackend) ForceCommit()                                               {}
+func (b *fakeBackend) Defrag() error                                              { return nil }
+func (b *fakeBackend) Close() error                                               { return nil }
 
 type indexGetResp struct {
 	rev     revision
@@ -936,12 +937,15 @@ type fakeIndex struct {
 	indexCompactRespc     chan map[revision]struct{}
 }
 
-func (i *fakeIndex) Revisions(key, end []byte, atRev int64, limit int) []revision {
+func (i *fakeIndex) Revisions(key, end []byte, atRev int64, limit int) ([]revision, int) {
 	_, rev := i.Range(key, end, atRev)
-	return rev
+	if len(rev) >= limit {
+		rev = rev[:limit]
+	}
+	return rev, len(rev)
 }
 
-func (i *fakeIndex) CountRevisions(key, end []byte, atRev int64, limit int) int {
+func (i *fakeIndex) CountRevisions(key, end []byte, atRev int64) int {
 	_, rev := i.Range(key, end, atRev)
 	return len(rev)
 }

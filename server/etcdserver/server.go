@@ -62,10 +62,12 @@ import (
 	"go.etcd.io/etcd/server/v3/etcdserver/api/v3alarm"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/v3compactor"
 	"go.etcd.io/etcd/server/v3/etcdserver/cindex"
+	serverversion "go.etcd.io/etcd/server/v3/etcdserver/version"
 	"go.etcd.io/etcd/server/v3/lease"
 	"go.etcd.io/etcd/server/v3/lease/leasehttp"
 	"go.etcd.io/etcd/server/v3/mvcc"
 	"go.etcd.io/etcd/server/v3/mvcc/backend"
+	"go.etcd.io/etcd/server/v3/mvcc/buckets"
 	"go.etcd.io/etcd/server/v3/wal"
 )
 
@@ -256,10 +258,11 @@ type EtcdServer struct {
 	applyV3Internal applierV3Internal
 	applyWait       wait.WaitTime
 
-	kv         mvcc.ConsistentWatchableKV
+	kv         mvcc.WatchableKV
 	lessor     lease.Lessor
 	bemu       sync.Mutex
 	be         backend.Backend
+	beHooks    *backendHooks
 	authStore  auth.AuthStore
 	alarmStore *v3alarm.AlarmStore
 
@@ -292,6 +295,39 @@ type EtcdServer struct {
 	firstCommitInTermC  chan struct{}
 
 	*AccessController
+
+	// Ensure that storage version is updated only once.
+	storageVersionUpdated sync.Once
+}
+
+type backendHooks struct {
+	indexer cindex.ConsistentIndexer
+	lg      *zap.Logger
+
+	// confState to be written in the next submitted backend transaction (if dirty)
+	confState raftpb.ConfState
+	// first write changes it to 'dirty'. false by default, so
+	// not initialized `confState` is meaningless.
+	confStateDirty bool
+	confStateLock  sync.Mutex
+}
+
+func (bh *backendHooks) OnPreCommitUnsafe(tx backend.BatchTx) {
+	bh.indexer.UnsafeSave(tx)
+	bh.confStateLock.Lock()
+	defer bh.confStateLock.Unlock()
+	if bh.confStateDirty {
+		buckets.MustUnsafeSaveConfStateToBackend(bh.lg, tx, &bh.confState)
+		// save bh.confState
+		bh.confStateDirty = false
+	}
+}
+
+func (bh *backendHooks) SetConfState(confState *raftpb.ConfState) {
+	bh.confStateLock.Lock()
+	defer bh.confStateLock.Unlock()
+	bh.confState = *confState
+	bh.confStateDirty = true
 }
 
 // NewServer creates a new EtcdServer from the supplied configuration. The
@@ -315,14 +351,6 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 			zap.Int("recommended-request-bytes", recommendedMaxRequestBytes),
 			zap.String("recommended-request-size", recommendedMaxRequestBytesString),
 		)
-	}
-
-	if cfg.ExperimentalMemoryMlock {
-		cfg.Logger.Info("mlocking memory")
-		err := MlockAll()
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	if terr := fileutil.TouchDirAll(cfg.DataDir); terr != nil {
@@ -353,7 +381,19 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 
 	bepath := cfg.BackendPath()
 	beExist := fileutil.Exist(bepath)
-	be := openBackend(cfg)
+
+	ci := cindex.NewConsistentIndex(nil)
+	beHooks := &backendHooks{lg: cfg.Logger, indexer: ci}
+	be := openBackend(cfg, beHooks)
+	ci.SetBackend(be)
+	buckets.CreateMetaBucket(be.BatchTx())
+
+	if cfg.ExperimentalBootstrapDefragThresholdMegabytes != 0 {
+		err := maybeDefragBackend(cfg, be)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	defer func() {
 		if err != nil {
@@ -393,7 +433,7 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 		remotes = existingCluster.Members()
 		cl.SetID(types.ID(0), existingCluster.ID())
 		cl.SetStore(st)
-		cl.SetBackend(be)
+		cl.SetBackend(buckets.NewMembershipStore(cfg.Logger, be))
 		id, n, s, w = startNode(cfg, cl, nil)
 		cl.SetID(id, existingCluster.ID())
 
@@ -428,7 +468,7 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 			}
 		}
 		cl.SetStore(st)
-		cl.SetBackend(be)
+		cl.SetBackend(buckets.NewMembershipStore(cfg.Logger, be))
 		id, n, s, w = startNode(cfg, cl, cl.MemberIDs())
 		cl.SetID(id, cl.ID())
 
@@ -465,13 +505,18 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 				cfg.Logger.Panic("failed to recover from snapshot", zap.Error(err))
 			}
 
+			if err = assertNoV2StoreContent(cfg.Logger, st, cfg.V2Deprecation); err != nil {
+				cfg.Logger.Error("illegal v2store content", zap.Error(err))
+				return nil, err
+			}
+
 			cfg.Logger.Info(
 				"recovered v2 store from snapshot",
 				zap.Uint64("snapshot-index", snapshot.Metadata.Index),
 				zap.String("snapshot-size", humanize.Bytes(uint64(snapshot.Size()))),
 			)
 
-			if be, err = recoverSnapshotBackend(cfg, be, *snapshot, beExist); err != nil {
+			if be, err = recoverSnapshotBackend(cfg, be, *snapshot, beExist, beHooks); err != nil {
 				cfg.Logger.Panic("failed to recover v3 backend from snapshot", zap.Error(err))
 			}
 			s1, s2 := be.Size(), be.SizeInUse()
@@ -482,6 +527,8 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 				zap.Int64("backend-size-in-use-bytes", s2),
 				zap.String("backend-size-in-use", humanize.Bytes(uint64(s2))),
 			)
+		} else {
+			cfg.Logger.Info("No snapshot found. Recovering WAL from scratch!")
 		}
 
 		if !cfg.ForceNewCluster {
@@ -491,7 +538,7 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 		}
 
 		cl.SetStore(st)
-		cl.SetBackend(be)
+		cl.SetBackend(buckets.NewMembershipStore(cfg.Logger, be))
 		cl.Recover(api.UpdateCapability)
 		if cl.Version() != nil && !cl.Version().LessThan(semver.Version{Major: 3}) && !beExist {
 			os.RemoveAll(bepath)
@@ -537,7 +584,7 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 		peerRt:             prt,
 		reqIDGen:           idutil.NewGenerator(uint16(id), time.Now()),
 		AccessController:   &AccessController{CORS: cfg.CORS, HostWhitelist: cfg.HostWhitelist},
-		consistIndex:       cindex.NewConsistentIndex(be.BatchTx()),
+		consistIndex:       ci,
 		firstCommitInTermC: make(chan struct{}),
 	}
 	serverID.With(prometheus.Labels{"server_id": id.String()}).Set(1)
@@ -545,20 +592,16 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 	srv.applyV2 = NewApplierV2(cfg.Logger, srv.v2store, srv.cluster)
 
 	srv.be = be
+	srv.beHooks = beHooks
 	minTTL := time.Duration((3*cfg.ElectionTicks)/2) * heartbeat
 
 	// always recover lessor before kv. When we recover the mvcc.KV it will reattach keys to its leases.
 	// If we recover mvcc.KV first, it will attach the keys to the wrong lessor before it recovers.
-	srv.lessor = lease.NewLessor(
-		srv.Logger(),
-		srv.be,
-		lease.LessorConfig{
-			MinLeaseTTL:                int64(math.Ceil(minTTL.Seconds())),
-			CheckpointInterval:         cfg.LeaseCheckpointInterval,
-			ExpiredLeasesRetryInterval: srv.Cfg.ReqTimeout(),
-		},
-		srv.consistIndex,
-	)
+	srv.lessor = lease.NewLessor(srv.Logger(), srv.be, lease.LessorConfig{
+		MinLeaseTTL:                int64(math.Ceil(minTTL.Seconds())),
+		CheckpointInterval:         cfg.LeaseCheckpointInterval,
+		ExpiredLeasesRetryInterval: srv.Cfg.ReqTimeout(),
+	})
 
 	tp, err := auth.NewTokenProvider(cfg.Logger, cfg.AuthToken,
 		func(index uint64) <-chan struct{} {
@@ -570,9 +613,16 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 		cfg.Logger.Warn("failed to create token provider", zap.Error(err))
 		return nil, err
 	}
-	srv.kv = mvcc.New(srv.Logger(), srv.be, srv.lessor, srv.consistIndex, mvcc.StoreConfig{CompactionBatchLimit: cfg.CompactionBatchLimit})
-	kvindex := srv.consistIndex.ConsistentIndex()
+
+	mvccStoreConfig := mvcc.StoreConfig{
+		CompactionBatchLimit:    cfg.CompactionBatchLimit,
+		CompactionSleepInterval: cfg.CompactionSleepInterval,
+	}
+	srv.kv = mvcc.New(srv.Logger(), srv.be, srv.lessor, mvccStoreConfig)
+
+	kvindex := ci.ConsistentIndex()
 	srv.lg.Debug("restore consistentIndex", zap.Uint64("index", kvindex))
+
 	if beExist {
 		// TODO: remove kvindex != 0 checking when we do not expect users to upgrade
 		// etcd from pre-3.0 release.
@@ -587,7 +637,7 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 		}
 	}
 
-	srv.authStore = auth.NewAuthStore(srv.Logger(), srv.be, srv.consistIndex, tp, int(cfg.BcryptCost))
+	srv.authStore = auth.NewAuthStore(srv.Logger(), srv.be, tp, int(cfg.BcryptCost))
 
 	newSrv := srv // since srv == nil in defer if srv is returned as nil
 	defer func() {
@@ -649,6 +699,23 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 	srv.r.transport = tr
 
 	return srv, nil
+}
+
+// assertNoV2StoreContent -> depending on the deprecation stage, warns or report an error
+// if the v2store contains custom content.
+func assertNoV2StoreContent(lg *zap.Logger, st v2store.Store, deprecationStage config.V2DeprecationEnum) error {
+	metaOnly, err := membership.IsMetaStoreOnly(st)
+	if err != nil {
+		return err
+	}
+	if metaOnly {
+		return nil
+	}
+	if deprecationStage.IsAtLeast(config.V2_DEPR_1_WRITE_ONLY) {
+		return fmt.Errorf("detected disallowed custom content in v2store for stage --v2-deprecation=%s", deprecationStage)
+	}
+	lg.Warn("detected custom v2store content. Etcd v3.5 is the last version allowing to access it using API v2. Please remove the content.")
+	return nil
 }
 
 func (s *EtcdServer) Logger() *zap.Logger {
@@ -1028,7 +1095,6 @@ func (s *EtcdServer) run() {
 		close(s.stopping)
 		s.wgMu.Unlock()
 		s.cancel()
-
 		sched.Stop()
 
 		// wait for gouroutines before closing raft so wal stays open
@@ -1040,23 +1106,8 @@ func (s *EtcdServer) run() {
 		// by adding a peer after raft stops the transport
 		s.r.stop()
 
-		// kv, lessor and backend can be nil if running without v3 enabled
-		// or running unit tests.
-		if s.lessor != nil {
-			s.lessor.Stop()
-		}
-		if s.kv != nil {
-			s.kv.Close()
-		}
-		if s.authStore != nil {
-			s.authStore.Close()
-		}
-		if s.be != nil {
-			s.be.Close()
-		}
-		if s.compactor != nil {
-			s.compactor.Stop()
-		}
+		s.Cleanup()
+
 		close(s.done)
 	}()
 
@@ -1109,6 +1160,28 @@ func (s *EtcdServer) run() {
 		case <-s.stop:
 			return
 		}
+	}
+}
+
+// Cleanup removes allocated objects by EtcdServer.NewServer in
+// situation that EtcdServer::Start was not called (that takes care of cleanup).
+func (s *EtcdServer) Cleanup() {
+	// kv, lessor and backend can be nil if running without v3 enabled
+	// or running unit tests.
+	if s.lessor != nil {
+		s.lessor.Stop()
+	}
+	if s.kv != nil {
+		s.kv.Close()
+	}
+	if s.authStore != nil {
+		s.authStore.Close()
+	}
+	if s.be != nil {
+		s.be.Close()
+	}
+	if s.compactor != nil {
+		s.compactor.Stop()
 	}
 }
 
@@ -1172,7 +1245,7 @@ func (s *EtcdServer) applySnapshot(ep *etcdProgress, apply *apply) {
 	// wait for raftNode to persist snapshot onto the disk
 	<-apply.notifyc
 
-	newbe, err := openSnapshotBackend(s.Cfg, s.snapshotter, apply.snapshot)
+	newbe, err := openSnapshotBackend(s.Cfg, s.snapshotter, apply.snapshot, s.beHooks)
 	if err != nil {
 		lg.Panic("failed to open snapshot backend", zap.Error(err))
 	}
@@ -1193,8 +1266,8 @@ func (s *EtcdServer) applySnapshot(ep *etcdProgress, apply *apply) {
 		lg.Panic("failed to restore mvcc store", zap.Error(err))
 	}
 
-	s.consistIndex.SetConsistentIndex(s.kv.ConsistentIndex())
-	lg.Info("restored mvcc store")
+	s.consistIndex.SetBackend(newbe)
+	lg.Info("restored mvcc store", zap.Uint64("consistent-index", s.consistIndex.ConsistentIndex()))
 
 	// Closing old backend might block until all the txns
 	// on the backend are finished.
@@ -1235,9 +1308,13 @@ func (s *EtcdServer) applySnapshot(ep *etcdProgress, apply *apply) {
 		lg.Panic("failed to restore v2 store", zap.Error(err))
 	}
 
+	if err := assertNoV2StoreContent(lg, s.v2store, s.Cfg.V2Deprecation); err != nil {
+		lg.Panic("illegal v2store content", zap.Error(err))
+	}
+
 	lg.Info("restored v2 store")
 
-	s.cluster.SetBackend(newbe)
+	s.cluster.SetBackend(buckets.NewMembershipStore(lg, newbe))
 
 	lg.Info("restoring cluster configuration")
 
@@ -2058,7 +2135,7 @@ func (s *EtcdServer) apply(
 
 			// set the consistent index of current executing entry
 			if e.Index > s.consistIndex.ConsistentIndex() {
-				s.consistIndex.SetConsistentIndex(e.Index)
+				s.consistIndex.SetConsistentIndex(e.Index, e.Term)
 				shouldApplyV3 = membership.ApplyBoth
 			}
 
@@ -2088,7 +2165,7 @@ func (s *EtcdServer) applyEntryNormal(e *raftpb.Entry) {
 	index := s.consistIndex.ConsistentIndex()
 	if e.Index > index {
 		// set the consistent index of current executing entry
-		s.consistIndex.SetConsistentIndex(e.Index)
+		s.consistIndex.SetConsistentIndex(e.Index, e.Term)
 		shouldApplyV3 = membership.ApplyBoth
 	}
 	s.lg.Debug("apply entry normal",
@@ -2115,13 +2192,14 @@ func (s *EtcdServer) applyEntryNormal(e *raftpb.Entry) {
 		rp := &r
 		pbutil.MustUnmarshal(rp, e.Data)
 		s.lg.Debug("applyEntryNormal", zap.Stringer("V2request", rp))
-		s.w.Trigger(r.ID, s.applyV2Request((*RequestV2)(rp)))
+		s.w.Trigger(r.ID, s.applyV2Request((*RequestV2)(rp), shouldApplyV3))
 		return
 	}
 	s.lg.Debug("applyEntryNormal", zap.Stringer("raftReq", &raftReq))
+
 	if raftReq.V2 != nil {
 		req := (*RequestV2)(raftReq.V2)
-		s.w.Trigger(req.ID, s.applyV2Request(req))
+		s.w.Trigger(req.ID, s.applyV2Request(req, shouldApplyV3))
 		return
 	}
 
@@ -2192,6 +2270,7 @@ func (s *EtcdServer) applyConfChange(cc raftpb.ConfChange, confState *raftpb.Con
 
 	lg := s.Logger()
 	*confState = *s.r.ApplyConfChange(cc)
+	s.beHooks.SetConfState(confState)
 	switch cc.Type {
 	case raftpb.ConfChangeAddNode, raftpb.ConfChangeAddLearnerNode:
 		confChangeContext := new(membership.ConfigChangeContext)
@@ -2256,6 +2335,9 @@ func (s *EtcdServer) applyConfChange(cc raftpb.ConfChange, confState *raftpb.Con
 func (s *EtcdServer) snapshot(snapi uint64, confState raftpb.ConfState) {
 	clone := s.v2store.Clone()
 	// commit kv to write metadata (for example: consistent index) to disk.
+	//
+	// This guarantees that Backend's consistent_index is >= index of last snapshot.
+	//
 	// KV().commit() updates the consistent index in backend.
 	// All operations that update consistent index must be called sequentially
 	// from applyAll function.
@@ -2293,6 +2375,12 @@ func (s *EtcdServer) snapshot(snapi uint64, confState raftpb.ConfState) {
 			"saved snapshot",
 			zap.Uint64("snapshot-index", snap.Metadata.Index),
 		)
+		s.storageVersionUpdated.Do(func() {
+			err := serverversion.UpdateStorageVersion(s.lg, s.be.BatchTx())
+			if err != nil {
+				s.lg.Warn("failed to update storage version", zap.Error(err))
+			}
+		})
 
 		// When sending a snapshot, etcd will pause compaction.
 		// After receives a snapshot, the slow follower needs to get all the entries right after
@@ -2353,11 +2441,9 @@ func (s *EtcdServer) ClusterVersion() *semver.Version {
 	return s.cluster.Version()
 }
 
-// monitorVersions checks the member's version every monitorVersionInterval.
-// It updates the cluster version if all members agrees on a higher one.
-// It prints out log if there is a member with a higher version than the
-// local version.
+// monitorVersions every monitorVersionInterval checks if it's the leader and updates cluster version if needed.
 func (s *EtcdServer) monitorVersions() {
+	monitor := serverversion.NewMonitor(s.Logger(), &serverVersionAdapter{s})
 	for {
 		select {
 		case <-s.FirstCommitInTermNotify():
@@ -2369,45 +2455,61 @@ func (s *EtcdServer) monitorVersions() {
 		if s.Leader() != s.ID() {
 			continue
 		}
-
-		v := decideClusterVersion(s.Logger(), getVersions(s.Logger(), s.cluster, s.id, s.peerRt))
-		if v != nil {
-			// only keep major.minor version for comparison
-			v = &semver.Version{
-				Major: v.Major,
-				Minor: v.Minor,
-			}
-		}
-
-		// if the current version is nil:
-		// 1. use the decided version if possible
-		// 2. or use the min cluster version
-		if s.cluster.Version() == nil {
-			verStr := version.MinClusterVersion
-			if v != nil {
-				verStr = v.String()
-			}
-			s.GoAttach(func() { s.updateClusterVersion(verStr) })
-			continue
-		}
-
-		if v != nil && membership.IsValidVersionChange(s.cluster.Version(), v) {
-			s.GoAttach(func() { s.updateClusterVersion(v.String()) })
-		}
+		monitor.UpdateClusterVersionIfNeeded()
 	}
 }
 
-func (s *EtcdServer) updateClusterVersion(ver string) {
+func (s *EtcdServer) updateClusterVersionV2(ver string) {
 	lg := s.Logger()
 
 	if s.cluster.Version() == nil {
 		lg.Info(
-			"setting up initial cluster version",
+			"setting up initial cluster version using v2 API",
 			zap.String("cluster-version", version.Cluster(ver)),
 		)
 	} else {
 		lg.Info(
-			"updating cluster version",
+			"updating cluster version using v2 API",
+			zap.String("from", version.Cluster(s.cluster.Version().String())),
+			zap.String("to", version.Cluster(ver)),
+		)
+	}
+
+	req := pb.Request{
+		Method: "PUT",
+		Path:   membership.StoreClusterVersionKey(),
+		Val:    ver,
+	}
+
+	ctx, cancel := context.WithTimeout(s.ctx, s.Cfg.ReqTimeout())
+	_, err := s.Do(ctx, req)
+	cancel()
+
+	switch err {
+	case nil:
+		lg.Info("cluster version is updated", zap.String("cluster-version", version.Cluster(ver)))
+		return
+
+	case ErrStopped:
+		lg.Warn("aborting cluster version update; server is stopped", zap.Error(err))
+		return
+
+	default:
+		lg.Warn("failed to update cluster version", zap.Error(err))
+	}
+}
+
+func (s *EtcdServer) updateClusterVersionV3(ver string) {
+	lg := s.Logger()
+
+	if s.cluster.Version() == nil {
+		lg.Info(
+			"setting up initial cluster version using v3 API",
+			zap.String("cluster-version", version.Cluster(ver)),
+		)
+	} else {
+		lg.Info(
+			"updating cluster version using v3 API",
 			zap.String("from", version.Cluster(s.cluster.Version().String())),
 			zap.String("to", version.Cluster(ver)),
 		)
@@ -2433,12 +2535,13 @@ func (s *EtcdServer) updateClusterVersion(ver string) {
 	}
 }
 
+// monitorDowngrade every DowngradeCheckTime checks if it's the leader and cancels downgrade if needed.
 func (s *EtcdServer) monitorDowngrade() {
+	monitor := serverversion.NewMonitor(s.Logger(), &serverVersionAdapter{s})
 	t := s.Cfg.DowngradeCheckTime
 	if t == 0 {
 		return
 	}
-	lg := s.Logger()
 	for {
 		select {
 		case <-time.After(t):
@@ -2449,22 +2552,7 @@ func (s *EtcdServer) monitorDowngrade() {
 		if !s.isLeader() {
 			continue
 		}
-
-		d := s.cluster.DowngradeInfo()
-		if !d.Enabled {
-			continue
-		}
-
-		targetVersion := d.TargetVersion
-		v := semver.Must(semver.NewVersion(targetVersion))
-		if isMatchedVersions(s.Logger(), v, getVersions(s.Logger(), s.cluster, s.id, s.peerRt)) {
-			lg.Info("the cluster has been downgraded", zap.String("cluster-version", targetVersion))
-			ctx, cancel := context.WithTimeout(context.Background(), s.Cfg.ReqTimeout())
-			if _, err := s.downgradeCancel(ctx); err != nil {
-				lg.Warn("failed to cancel downgrade", zap.Error(err))
-			}
-			cancel()
-		}
+		monitor.CancelDowngradeIfNeeded()
 	}
 }
 
@@ -2501,7 +2589,7 @@ func (s *EtcdServer) parseProposeCtxErr(err error, start time.Time) error {
 	}
 }
 
-func (s *EtcdServer) KV() mvcc.ConsistentWatchableKV { return s.kv }
+func (s *EtcdServer) KV() mvcc.WatchableKV { return s.kv }
 func (s *EtcdServer) Backend() backend.Backend {
 	s.bemu.Lock()
 	defer s.bemu.Unlock()
@@ -2565,4 +2653,23 @@ func (s *EtcdServer) IsMemberExist(id types.ID) bool {
 // raftStatus returns the raft status of this etcd node.
 func (s *EtcdServer) raftStatus() raft.Status {
 	return s.r.Node.Status()
+}
+
+func maybeDefragBackend(cfg config.ServerConfig, be backend.Backend) error {
+	size := be.Size()
+	sizeInUse := be.SizeInUse()
+	freeableMemory := uint(size - sizeInUse)
+	thresholdBytes := cfg.ExperimentalBootstrapDefragThresholdMegabytes * 1024 * 1024
+	if freeableMemory < thresholdBytes {
+		cfg.Logger.Info("Skipping defragmentation",
+			zap.Int64("current-db-size-bytes", size),
+			zap.String("current-db-size", humanize.Bytes(uint64(size))),
+			zap.Int64("current-db-size-in-use-bytes", sizeInUse),
+			zap.String("current-db-size-in-use", humanize.Bytes(uint64(sizeInUse))),
+			zap.Uint("experimental-bootstrap-defrag-threshold-bytes", thresholdBytes),
+			zap.String("experimental-bootstrap-defrag-threshold", humanize.Bytes(uint64(thresholdBytes))),
+		)
+		return nil
+	}
+	return be.Defrag()
 }

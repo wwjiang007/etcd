@@ -20,8 +20,8 @@ import (
 
 	"go.etcd.io/etcd/raft/v3/raftpb"
 	"go.etcd.io/etcd/server/v3/datadir"
-	"go.etcd.io/etcd/server/v3/etcdserver/cindex"
 	"go.etcd.io/etcd/server/v3/mvcc/backend"
+	"go.etcd.io/etcd/server/v3/mvcc/buckets"
 	wal2 "go.etcd.io/etcd/server/v3/wal"
 	"go.etcd.io/etcd/server/v3/wal/walpb"
 	"go.uber.org/zap"
@@ -76,7 +76,7 @@ func Verify(cfg Config) error {
 	be := backend.New(beConfig)
 	defer be.Close()
 
-	_, hardstate, err := validateWal(cfg)
+	snapshot, hardstate, err := validateWal(cfg)
 	if err != nil {
 		return err
 	}
@@ -84,7 +84,7 @@ func Verify(cfg Config) error {
 	// TODO: Perform validation of consistency of membership between
 	// backend/members & WAL confstate (and maybe storev2 if still exists).
 
-	return validateConsistentIndex(cfg, hardstate, be)
+	return validateConsistentIndex(cfg, hardstate, snapshot, be)
 }
 
 // VerifyIfEnabled performs verification according to ETCD_VERIFY env settings.
@@ -101,22 +101,32 @@ func VerifyIfEnabled(cfg Config) error {
 // See Verify for more information.
 func MustVerifyIfEnabled(cfg Config) {
 	if err := VerifyIfEnabled(cfg); err != nil {
-		cfg.Logger.Panic("Verification failed",
+		cfg.Logger.Fatal("Verification failed",
 			zap.String("data-dir", cfg.DataDir),
 			zap.Error(err))
 	}
 }
 
-func validateConsistentIndex(cfg Config, hardstate *raftpb.HardState, be backend.Backend) error {
+func validateConsistentIndex(cfg Config, hardstate *raftpb.HardState, snapshot *walpb.Snapshot, be backend.Backend) error {
 	tx := be.BatchTx()
-	ci := cindex.NewConsistentIndex(tx)
-	index := ci.ConsistentIndex()
+	index, term := buckets.ReadConsistentIndex(tx)
 	if cfg.ExactIndex && index != hardstate.Commit {
 		return fmt.Errorf("backend.ConsistentIndex (%v) expected == WAL.HardState.commit (%v)", index, hardstate.Commit)
+	}
+	if cfg.ExactIndex && term != hardstate.Term {
+		return fmt.Errorf("backend.Term (%v) expected == WAL.HardState.term, (%v)", term, hardstate.Term)
 	}
 	if index > hardstate.Commit {
 		return fmt.Errorf("backend.ConsistentIndex (%v) must be <= WAL.HardState.commit (%v)", index, hardstate.Commit)
 	}
+	if term > hardstate.Term {
+		return fmt.Errorf("backend.Term (%v) must be <= WAL.HardState.term, (%v)", term, hardstate.Term)
+	}
+
+	if index < snapshot.Index {
+		return fmt.Errorf("backend.ConsistentIndex (%v) must be >= last snapshot index (%v)", index, snapshot.Index)
+	}
+
 	cfg.Logger.Info("verification: consistentIndex OK", zap.Uint64("backend-consistent-index", index), zap.Uint64("hardstate-commit", hardstate.Commit))
 	return nil
 }

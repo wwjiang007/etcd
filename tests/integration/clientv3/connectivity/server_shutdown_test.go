@@ -17,6 +17,7 @@ package connectivity_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -42,7 +43,7 @@ func TestBalancerUnderServerShutdownWatch(t *testing.T) {
 	lead := clus.WaitLeader(t)
 
 	// pin eps[lead]
-	watchCli, err := clientv3.New(clientv3.Config{Endpoints: []string{eps[lead]}})
+	watchCli, err := integration.NewClient(t, clientv3.Config{Endpoints: []string{eps[lead]}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +89,7 @@ func TestBalancerUnderServerShutdownWatch(t *testing.T) {
 	clus.Members[lead].Terminate(t)
 
 	// writes to eps[lead+1]
-	putCli, err := clientv3.New(clientv3.Config{Endpoints: []string{eps[(lead+1)%3]}})
+	putCli, err := integration.NewClient(t, clientv3.Config{Endpoints: []string{eps[(lead+1)%3]}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +153,7 @@ func testBalancerUnderServerShutdownMutable(t *testing.T, op func(*clientv3.Clie
 	eps := []string{clus.Members[0].GRPCAddr(), clus.Members[1].GRPCAddr(), clus.Members[2].GRPCAddr()}
 
 	// pin eps[0]
-	cli, err := clientv3.New(clientv3.Config{Endpoints: []string{eps[0]}})
+	cli, err := integration.NewClient(t, clientv3.Config{Endpoints: []string{eps[0]}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +211,7 @@ func testBalancerUnderServerShutdownImmutable(t *testing.T, op func(*clientv3.Cl
 	eps := []string{clus.Members[0].GRPCAddr(), clus.Members[1].GRPCAddr(), clus.Members[2].GRPCAddr()}
 
 	// pin eps[0]
-	cli, err := clientv3.New(clientv3.Config{Endpoints: []string{eps[0]}})
+	cli, err := integration.NewClient(t, clientv3.Config{Endpoints: []string{eps[0]}})
 	if err != nil {
 		t.Errorf("failed to create client: %v", err)
 	}
@@ -243,8 +244,10 @@ func TestBalancerUnderServerStopInflightLinearizableGetOnRestart(t *testing.T) {
 		{pinLeader: false, stopPinFirst: true},
 		{pinLeader: false, stopPinFirst: false},
 	}
-	for i := range tt {
-		testBalancerUnderServerStopInflightRangeOnRestart(t, true, tt[i])
+	for _, w := range tt {
+		t.Run(fmt.Sprintf("%#v", w), func(t *testing.T) {
+			testBalancerUnderServerStopInflightRangeOnRestart(t, true, w)
+		})
 	}
 }
 
@@ -255,8 +258,10 @@ func TestBalancerUnderServerStopInflightSerializableGetOnRestart(t *testing.T) {
 		{pinLeader: false, stopPinFirst: true},
 		{pinLeader: false, stopPinFirst: false},
 	}
-	for i := range tt {
-		testBalancerUnderServerStopInflightRangeOnRestart(t, false, tt[i])
+	for _, w := range tt {
+		t.Run(fmt.Sprintf("%#v", w), func(t *testing.T) {
+			testBalancerUnderServerStopInflightRangeOnRestart(t, false, w)
+		})
 	}
 }
 
@@ -293,7 +298,7 @@ func testBalancerUnderServerStopInflightRangeOnRestart(t *testing.T, linearizabl
 	}
 
 	// pin eps[target]
-	cli, err := clientv3.New(clientv3.Config{Endpoints: []string{eps[target]}})
+	cli, err := integration.NewClient(t, clientv3.Config{Endpoints: []string{eps[target]}})
 	if err != nil {
 		t.Errorf("failed to create client: %v", err)
 	}

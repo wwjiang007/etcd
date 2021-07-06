@@ -83,10 +83,20 @@ func New(cfg Config) (*Client, error) {
 // NewCtxClient creates a client with a context but no underlying grpc
 // connection. This is useful for embedded cases that override the
 // service interface implementations and do not need connection management.
-func NewCtxClient(ctx context.Context) *Client {
+func NewCtxClient(ctx context.Context, opts ...Option) *Client {
 	cctx, cancel := context.WithCancel(ctx)
-	return &Client{ctx: cctx, cancel: cancel, lgMu: new(sync.RWMutex), lg: zap.NewNop()}
+	c := &Client{ctx: cctx, cancel: cancel, lgMu: new(sync.RWMutex)}
+	for _, opt := range opts {
+		opt(c)
+	}
+	if c.lg == nil {
+		c.lg = zap.NewNop()
+	}
+	return c
 }
+
+// Option is a function type that can be passed as argument to NewCtxClient to configure client
+type Option func(*Client)
 
 // NewFromURL creates a new etcdv3 client from a URL.
 func NewFromURL(url string) (*Client, error) {
@@ -98,7 +108,17 @@ func NewFromURLs(urls []string) (*Client, error) {
 	return New(Config{Endpoints: urls})
 }
 
+// WithZapLogger is a NewCtxClient option that overrides the logger
+func WithZapLogger(lg *zap.Logger) Option {
+	return func(c *Client) {
+		c.lg = lg
+	}
+}
+
 // WithLogger overrides the logger.
+//
+// Deprecated: Please use WithZapLogger or Logger field in clientv3.Config
+//
 // Does not changes grpcLogger, that can be explicitly configured
 // using grpc_zap.ReplaceGrpcLoggerV2(..) method.
 func (c *Client) WithLogger(lg *zap.Logger) *Client {
@@ -215,8 +235,8 @@ func (c *Client) dialSetupOpts(creds grpccredentials.TransportCredentials, dopts
 	opts = append(opts,
 		// Disable stream retry by default since go-grpc-middleware/retry does not support client streams.
 		// Streams that are safe to retry are enabled individually.
-		grpc.WithStreamInterceptor(c.streamClientInterceptor(c.lg, withMax(0), rrBackoff)),
-		grpc.WithUnaryInterceptor(c.unaryClientInterceptor(c.lg, withMax(defaultUnaryMaxRetries), rrBackoff)),
+		grpc.WithStreamInterceptor(c.streamClientInterceptor(withMax(0), rrBackoff)),
+		grpc.WithUnaryInterceptor(c.unaryClientInterceptor(withMax(defaultUnaryMaxRetries), rrBackoff)),
 	)
 
 	return opts, nil
@@ -263,8 +283,7 @@ func (c *Client) dial(creds grpccredentials.TransportCredentials, dopts ...grpc.
 	if err != nil {
 		return nil, fmt.Errorf("failed to configure dialer: %v", err)
 	}
-	if c.Username != "" && c.Password != "" {
-		c.authTokenBundle = credentials.NewBundle(credentials.Config{})
+	if c.authTokenBundle != nil {
 		opts = append(opts, grpc.WithPerRPCCredentials(c.authTokenBundle.PerRPCCredentials()))
 	}
 
@@ -331,10 +350,12 @@ func newClient(cfg *Config) (*Client, error) {
 	}
 
 	var err error
-	if cfg.LogConfig != nil {
+	if cfg.Logger != nil {
+		client.lg = cfg.Logger
+	} else if cfg.LogConfig != nil {
 		client.lg, err = cfg.LogConfig.Build()
 	} else {
-		client.lg, err = createDefaultZapLogger()
+		client.lg, err = CreateDefaultZapLogger()
 	}
 	if err != nil {
 		return nil, err
@@ -343,6 +364,7 @@ func newClient(cfg *Config) (*Client, error) {
 	if cfg.Username != "" && cfg.Password != "" {
 		client.Username = cfg.Username
 		client.Password = cfg.Password
+		client.authTokenBundle = credentials.NewBundle(credentials.Config{})
 	}
 	if cfg.MaxCallSendMsgSize > 0 || cfg.MaxCallRecvMsgSize > 0 {
 		if cfg.MaxCallRecvMsgSize > 0 && cfg.MaxCallSendMsgSize > cfg.MaxCallRecvMsgSize {
